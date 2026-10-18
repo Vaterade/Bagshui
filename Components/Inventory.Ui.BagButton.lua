@@ -175,7 +175,7 @@ function InventoryUi:CreateBagSlotButtons()
 
 
 		local onUpdate_refreshTooltip -- Storing at a higher scope to reduce garbage collector load.
-		bagSlotButton:SetScript("OnUpdate", function(elapsed)
+		bagSlotButton:SetScript("OnUpdate", function()
 			onUpdate_refreshTooltip = false
 
 			-- Safeguard to prevent tooltips from popping up when the mouse has already left.
@@ -190,7 +190,7 @@ function InventoryUi:CreateBagSlotButtons()
 				-- tooltipCooldownUpdate is initially set to 1 by OnEnter when there's a cooldown.
 				-- Here we subtract the elapsed time in seconds, which will eventually go below 0
 				-- so long as the property isn't wiped by moving the mouse off this item.
-				_G.this.bagshuiData.tooltipCooldownUpdate = _G.this.bagshuiData.tooltipCooldownUpdate - elapsed
+				_G.this.bagshuiData.tooltipCooldownUpdate = _G.this.bagshuiData.tooltipCooldownUpdate - _G.arg1
 
 				-- Don't proceed until it's been more than 1 second.
 				if _G.this.bagshuiData.tooltipCooldownUpdate < 0 then
