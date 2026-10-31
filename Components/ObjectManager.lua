@@ -329,7 +329,7 @@ function ObjectManager:Open()
 	end
 
 	-- Populate the object list.
-	self:UpdateList()
+	self:UpdateList(false)
 
 	-- Display the UI.
 	self.uiFrame:SetPoint("CENTER", 0, 0)
@@ -574,8 +574,10 @@ end
 
 
 --- Load/refresh the object list.
-function ObjectManager:UpdateList()
-	self.ui:PopulateScrollableList(self.ui.listFrame, self:GetObjectList())
+---@param preserveSearch boolean? Keep any entered search text (default: true).
+function ObjectManager:UpdateList(preserveSearch)
+	preserveSearch = type(preserveSearch) ~= "boolean" and true or preserveSearch
+	self.ui:PopulateScrollableList(self.ui.listFrame, self:GetObjectList(), nil, nil, preserveSearch)
 end
 
 
@@ -678,10 +680,10 @@ function ObjectManager:DeleteAfterConfirmation()
 			text = L.ObjectManager_DeletePrompt,
 			button1 = L.Delete,
 			button2 = L.Cancel,
-			showAlert = 1,
+			showAlert = true,
 			timeout = 0,
-			whileDead = 1,
-			hideOnEscape = 0,
+			whileDead = true,
+			hideOnEscape = true,
 			--- Perform deletion (no need for OnCancel as that simply needs to do nothing).
 			---@param data table Reference to `self.deleteAfterConfirmation_Data`, passed through via the dialog's `data` property.
 			OnAccept = function(data)
@@ -955,7 +957,11 @@ function ObjectEditor:InitUi()
 	self.title = self.uiFrame.bagshuiData.title
 
 	-- Wipe object info on close.
+	local oldOnHide = uiFrame:GetScript("OnHide")
 	uiFrame:SetScript("OnHide", function()
+		if oldOnHide then
+			oldOnHide()
+		end
 		self.objectId = nil
 		self.originalObject = nil
 		BsUtil.TableClear(self.updatedObject)
@@ -993,11 +999,18 @@ function ObjectEditor:InitUi()
 		height = 16,
 		xOffset = -BsSkin.toolbarCloseButtonOffset,
 		onClick = function()
+			-- This should never be reached, but just to be extra sure...
+			if self.originalObject and self.originalObject.readOnly then
+				Bs:PrintError("Object is read-only; saving is not allowed.")
+				return
+			end
 			if self:Save() then
 				-- Call onFirstSave function if present.
 				if type(self.onFirstSave) == "function" then
 					self.onFirstSave(self.objectId)
 				end
+				-- Only fire once. It needs to be set again to repeat.
+				self.onFirstSave = nil
 			end
 		end,
 	})
@@ -1260,37 +1273,20 @@ function ObjectEditor:InitUi()
 
 			-- Add to UI.
 			self.labelWidgetPairs[fieldName] = ui:CreateLabeledWidget(
-				self.content,       -- Parent
-				fieldLabel,         -- Label text
-				labelWidth,         -- Label width
-				widget,             -- Widget
-				widgetWidth,        -- Widget width
-				widgetHeight,       -- Widget height
-				nextAnchor,         -- Anchor to frame
-				nextAnchorToPoint   -- Anchor to point
+				self.content,  -- Parent.
+				fieldLabel,  -- Label text.
+				labelWidth,  -- Label width.
+				widget,  -- Widget.
+				widgetWidth,  -- Widget width.
+				widgetHeight,  -- Widget height.
+				"TOPLEFT",  -- Anchor point.
+				nextAnchor,  -- Anchor to frame.
+				nextAnchorToPoint,  -- Anchor to point.
+				nil,  -- X offset.
+				nil,  -- Y offset.
+				localizedFieldName,  -- Tooltip title.
+				L_nil[self.objectType .. "Editor_Field_" .. fieldName .. "_TooltipText"]  -- Tooltip 
 			)
-
-			-- Widget tooltips.
-			local tooltipText = L_nil[self.objectType .. "Editor_Field_" .. fieldName .. "_TooltipText"]
-			if tooltipText then
-				local widgetHoldingFrame = self.labelWidgetPairs[fieldName]
-
-				widget:SetScript("OnEnter", function()
-					_G.GameTooltip:ClearLines()
-					_G.GameTooltip_SetDefaultAnchor(_G.GameTooltip, _G.this)
-					_G.GameTooltip:AddLine(localizedFieldName, HIGHLIGHT_FONT_COLOR.r, HIGHLIGHT_FONT_COLOR.g, HIGHLIGHT_FONT_COLOR.b, true)
-					_G.GameTooltip:AddLine(tooltipText, nil, nil, nil, true)
-					_G.GameTooltip:SetWidth(10)
-					Bagshui:ShowTooltipAfterDelay(_G.GameTooltip, _G.this, widgetHoldingFrame)
-				end)
-
-				widget:SetScript("OnLeave", function()
-					if _G.GameTooltip:IsOwned(_G.this) then
-						Bagshui:ShortenTooltipDelay(_G.this, true)
-						_G.GameTooltip:Hide()
-					end
-				end)
-			end
 
 			nextAnchor = self.labelWidgetPairs[fieldName]
 			nextAnchorToPoint = "BOTTOMLEFT"
@@ -1354,7 +1350,10 @@ function ObjectEditor:Load(objectId, duplicate, template, refresh, onFirstSave)
 
 	-- Store information for future use.
 	self.objectId = objectId  -- Needed when checking for editor reuse.
-	self.onFirstSave = onFirstSave  -- Consumed by the OnClick for the Save toolbar button.
+	-- Don't clear an existing `onFirstSave` -- that will be done in the Save toolbar button OnClick.
+	if onFirstSave then
+		self.onFirstSave = onFirstSave  -- Consumed by the OnClick for the Save toolbar button.
+	end
 
 	-- Grab existing object info.
 	local objectInfo = self.manager:GetObjectInfo(objectId)
@@ -1409,9 +1408,7 @@ function ObjectEditor:Load(objectId, duplicate, template, refresh, onFirstSave)
 	end
 
 	-- Remove focus from all edit boxes.
-	for _, editBox in pairs(self.editBoxes) do
-		editBox:ClearFocus()
-	end
+	self:CloseMenusAndClearFocuses(false, true, true)
 
 	-- Re-focus the Name field if it's a new object.
 	if isNew then
@@ -1447,11 +1444,12 @@ function ObjectEditor:PopulateField(fieldName, fallbackStorageTable)
 
 	-- Edit boxes and scrollable lists are different.
 	if self.editBoxes[fieldName] then
-		-- Set readOnlyText property for fake read-only-ness.
-		self.editBoxes[fieldName].bagshuiData.readOnlyText = readOnly and value or nil
-
-		-- Populate the EditBox.
-		self.editBoxes[fieldName]:SetText(value or "")
+		-- Use our `:SetText()` wrapper to handle read-only.
+		self.ui:SetEditBoxText(
+			self.editBoxes[fieldName],
+			value or "",
+			readOnly
+		)
 
 
 	elseif self.lists[fieldName] then
@@ -1460,10 +1458,12 @@ function ObjectEditor:PopulateField(fieldName, fallbackStorageTable)
 		-- Need to use `scrollableList_Disable` here instead of `scrollableList_DisableIfReadOnly`
 		-- because the list entries themselves won't have a readOnly property; only the
 		-- object being edited does. We still rely on the `scrollableList_DisableIfReadOnly` property
-		-- to trigger the disable though so that some buttons can be kept enabled if needed.
+		-- to trigger the disable so that some buttons can be kept enabled if needed.
 		for _, button in pairs(self.lists[fieldName].bagshuiData.buttons) do
 			button.bagshuiData.scrollableList_Disable = button.bagshuiData.scrollableList_DisableIfReadOnly and readOnly or false
 		end
+		-- Also set the list to read-only. (This was added later so I'm not messing with the original code.)
+		self.lists[fieldName].bagshuiData.readOnly = readOnly
 
 		-- Fill the list and scroll it to the top.
 		self.lists[fieldName].bagshuiData.scrollFrame:SetVerticalScroll(0)
@@ -1483,11 +1483,11 @@ function ObjectEditor:PromptForSave()
 			text = L.ObjectEditor_UnsavedPrompt,
 			button1 = L.AbandonChanges,
 			button2 = L.KeepEditing,
-			showAlert = 1,
+			showAlert = true,
 			timeout = 0,
-			whileDead = 1,
-			hideOnEscape = 0,
-			notClosableByLogout = 1,
+			whileDead = true,
+			hideOnEscape = true,
+			notClosableByLogout = true,
 			-- Abandon changes to the object (no need for OnCancel as that simply needs to do nothing).
 			-- The editor parameter comes from the dialog's data property which is set below.
 			OnAccept = function(editor)
@@ -1556,6 +1556,11 @@ function ObjectEditor:UpdateState()
 			self.fieldErrors[property].icon = "Icons\\Exclamation"
 			enableDisableFunction = "Disable"
 		end
+	end
+
+	-- Read-only -- never allow saving.
+	if self.originalObject.readOnly then
+		enableDisableFunction = "Disable"
 	end
 
 	-- Update Save buttons state and show any errors.
@@ -1735,7 +1740,8 @@ function ObjectEditor:BringToFront()
 		self.uiFrame:ClearAllPoints()
 		self.uiFrame:SetPoint(point, anchorToFrame, point, 20, -20)
 		self.uiFrame:Show()
-		self.uiFrame:ClearAllPoints()
+		self.uiFrame:SetToplevel(true)
+		self.uiFrame:SetMovable(true)
 	else
 		self.uiFrame:Raise()
 	end

@@ -42,7 +42,8 @@ end
 ---@param hide boolean? When `true` the handler will not appear in the list output by `Slash:PrintHandlers()`.
 function Slash:AddHandler(handlerName, handlerFunction, hide)
 	handlerName = string.gsub(handlerName, "%s+", "")
-	local localizedHandlerName = L_nil[handlerName] and string.gsub(L[handlerName], "%s+", "")
+	local localizedHandlerId = L_nil["Slash_" .. handlerName] and "Slash_" .. handlerName or handlerName
+	local localizedHandlerName = L_nil[localizedHandlerId] and string.gsub(L[localizedHandlerId], "%s+", "")
 	self.handlerList[string.lower(handlerName)] = handlerFunction
 	if localizedHandlerName then
 		self.handlerList[string.lower(localizedHandlerName)] = handlerFunction
@@ -82,7 +83,7 @@ function Slash:AddOpenCloseHandler(handlerName, classObj, extraVerbs, extraHandl
 	end
 	if type(extraVerbs) == "table" then
 		for _, verb in ipairs(extraVerbs) do
-			table.insert(handlerList, verb)
+			table.insert(handlerList, (string.gsub(verb, "%s+", "")))
 		end
 	end
 

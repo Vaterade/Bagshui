@@ -84,7 +84,21 @@ function InventoryUi:CreateBagSlotButtons()
 			),
 			primary = primaryBag,
 			highlightLocked = false,
+			cooldown = _G[buttonName .. "Cooldown"]
 		}
+
+		-- Need to nuke this property to prevent flickering when bags are being
+		-- swapped with adjusted TexCoords (i.e. pfUI skin) due to an
+		-- "our code vs Blizzard code" issue.
+		bagSlotButton.backgroundTextureName = nil
+
+		-- Create cooldown if needed.
+		if not bagSlotButton.bagshuiData.cooldown then
+			bagSlotButton.bagshuiData.cooldown = self:CreateItemButtonCooldown(bagSlotButton)
+		end
+		-- Set this even though we're not relying on it.
+		-- See `Ui:ShowProgressViaCooldown()` for details.
+		bagSlotButton.bagshuiData.cooldown.noCooldownCount = true
 
 
 		-- Apply all our appearance adjustments.
@@ -136,6 +150,7 @@ function InventoryUi:CreateBagSlotButtons()
 			if
 				inventory:BagSlotButtonHasBag(this)
 				and not inventory.highlightItemsInContainerLocked
+				and not inventory.highlightItemsContainerSlot
 			then
 				inventory.highlightItemsInContainerId = this.bagshuiData.bagNum
 				inventory:UpdateItemSlotColors()
@@ -164,6 +179,7 @@ function InventoryUi:CreateBagSlotButtons()
 			if
 				inventory.highlightItemsInContainerId == _G.this.bagshuiData.bagNum
 				and not inventory.highlightItemsInContainerLocked
+				and not inventory.highlightItemsContainerSlot
 			then
 				inventory.highlightItemsInContainerId = nil
 				inventory:UpdateItemSlotColors()
@@ -174,9 +190,57 @@ function InventoryUi:CreateBagSlotButtons()
 		end)
 
 
-		local onUpdate_refreshTooltip -- Storing at a higher scope to reduce garbage collector load.
+		-- Storing at a higher scope to reduce garbage collector load.
+
+		local onUpdate_refreshTooltip, onUpdate_cooldownStart, onUpdate_cooldownDuration, onUpdate_cooldownEnable
+
 		bagSlotButton:SetScript("OnUpdate", function()
 			onUpdate_refreshTooltip = false
+
+			-- Remove item highlighting if there's no longer a container in the slot.
+			if
+				inventory.highlightItemsInContainerLocked == _G.this.bagshuiData.bagNum
+				and not inventory:BagSlotButtonHasBag(_G.this)
+				and not inventory.highlightItemsContainerSlot
+			then
+				inventory.highlightItemsInContainerLocked = nil
+				inventory.highlightItemsInContainerId = nil
+				inventory:UpdateBagBar()
+				inventory:UpdateItemSlotColors()
+			end
+
+			-- "Progress bar" for bag swapping using the cooldown animation.
+			if type(_G.this.bagshuiData.progressPercent) == "number" then
+				-- Use this by setting the bagButton.bagshuiData.progressPercent property to a value 0-100.
+				-- At 100, the completion shine animation will trigger.
+
+				if not _G.this.bagshuiData.progressFinishing then
+					-- This has to run on every frame to hold the cooldown at the same spot.
+					self:ShowProgressViaCooldown(
+						_G.this.bagshuiData.cooldown,
+						_G.this.bagshuiData.progressPercent
+					)
+				end
+
+				if _G.this.bagshuiData.progressPercent == 100 then
+					_G.this.bagshuiData.progressFinishing = true
+				end
+
+				if _G.this.bagshuiData.progressFinishing and not _G.this.bagshuiData.cooldown:IsVisible() then
+					_G.this.bagshuiData.progressPercent = nil
+					_G.this.bagshuiData.progressFinishing = nil
+				end
+
+			-- elseif this.bagshuiData.inventorySlotId then
+				-- Normal cooldown checking is disabled because I don't think bag cooldowns are even a thing.
+				-- Easy enough to restore if needed.
+				-- If it does get enabled, there will also need to be something added to
+				-- Ui:ShowProgressViaCooldown() to hide any cooldown text that was present.
+				--
+				-- Normal cooldown behavior (primary containers can't have cooldowns so they're excluded.)
+				-- onUpdate_cooldownStart, onUpdate_cooldownDuration, onUpdate_cooldownEnable = _G.GetInventoryItemCooldown("player", _G.this.bagshuiData.inventorySlotId)
+				-- _G.CooldownFrame_SetTimer(_G.this.bagshuiData.cooldown, onUpdate_cooldownStart, onUpdate_cooldownDuration, onUpdate_cooldownEnable);
+			end
 
 			-- Safeguard to prevent tooltips from popping up when the mouse has already left.
 			if not _G.this.bagshuiData.mouseIsOver then
@@ -184,8 +248,6 @@ function InventoryUi:CreateBagSlotButtons()
 				return
 			end
 
-			-- Honestly not even sure if bag cooldowns are something that need to be
-			-- accounted for, but I guess we'll handle it just in case.
 			if _G.this.bagshuiData.tooltipCooldownUpdate ~= nil then
 				-- tooltipCooldownUpdate is initially set to 1 by OnEnter when there's a cooldown.
 				-- Here we subtract the elapsed time in seconds, which will eventually go below 0
@@ -213,9 +275,11 @@ function InventoryUi:CreateBagSlotButtons()
 			local this = _G.this
 			local bagNum = this.bagshuiData.bagNum
 
+			local hasBag = inventory:BagSlotButtonHasBag(this)
+
 			-- Alt-click highlight lock.
 			if
-				inventory:BagSlotButtonHasBag(this)
+				hasBag
 				and (
 					_G.IsAltKeyDown()
 					-- Normal clicking needs to remove the highlight lock since the bag might be getting picked up.
@@ -226,9 +290,14 @@ function InventoryUi:CreateBagSlotButtons()
 				)
 				and not inventory.editMode
 			then
+				local oldHighlightItemsInContainerLocked = inventory.highlightItemsInContainerLocked
 
-				-- Toggle highlight lock for this button
-				-- this.bagshuiData.highlightLocked = not this.bagshuiData.highlightLocked
+				-- Don't do anything if a specific item is highlighted.
+				if inventory.highlightItemsContainerSlot then
+					return
+				end
+
+				-- Toggle highlight lock for this button.
 				inventory.highlightItemsInContainerLocked =
 					inventory.highlightItemsInContainerLocked ~= bagNum
 					and bagNum
@@ -236,7 +305,13 @@ function InventoryUi:CreateBagSlotButtons()
 
 				inventory.highlightItemsInContainerId = bagNum
 				inventory:UpdateBagBar()
-				inventory:UpdateItemSlotColors()
+				-- When the highlight lock is changed, we need to do a full window update
+				-- so hidden items in this bag can be shown or hidden.
+				if oldHighlightItemsInContainerLocked ~= inventory.highlightItemsInContainerLocked then
+					inventory:ForceUpdateWindow()
+				else
+					inventory:UpdateItemSlotColors()
+				end
 
 				-- Don't pick up bag or do anything else if alt key was down.
 				if _G.IsAltKeyDown() then
@@ -249,12 +324,28 @@ function InventoryUi:CreateBagSlotButtons()
 				return
 			end
 
-			-- Putting items in the primary container needs special handling because there doesn't seem to be
-			-- a bag ID that works with PutItemInBag for the primary Bank or Keyring containers. So instead
-			-- we're iterating the container and looking for empty slots, then calling PickupContainerItem.
-			-- This doesn't need to use Bagshui:PickupItem() since cursor tracking data gets cleared via the
-			-- ClearCursor() hook and we don't need to call ContainerFrameItemButton_OnClick() either.
-			if this.bagshuiData.primary and _G.CursorHasItem() then
+			-- Two special cases are handled here.
+			--
+			-- 1. Placing items in the primary container.
+			-- This needs special handling because there doesn't seem to be a bag ID
+			-- that works with PutItemInBag for the primary Bank or Keyring containers.
+			-- So instead we're iterating the container and looking for empty slots,
+			-- then calling PickupContainerItem. This doesn't need to use Bagshui:PickupItem()
+			-- since cursor tracking data gets cleared via the ClearCursor() hook and we
+			-- don't need to call ContainerFrameItemButton_OnClick() either.
+			-- 
+			-- 2. Placing a bag in another bag via Shift+Click.
+			if
+				_G.CursorHasItem()
+				and (
+					this.bagshuiData.primary
+					or (
+						inventory:BagSlotButtonHasBag(this)
+						and BsItemInfo:IsContainer(Bagshui.cursorItem)
+						and _G.IsShiftKeyDown()
+					)
+				)
+			then
 				local noEmptySlots = true
 				for slotNum, slotContents in ipairs(inventory.inventory[this.bagshuiData.bagNum]) do
 					if slotContents.emptySlot == 1 then
@@ -265,10 +356,59 @@ function InventoryUi:CreateBagSlotButtons()
 				if noEmptySlots then
 					Bagshui:ShowErrorMessage(_G.BAG_FULL, self.inventoryType)
 				end
+				return
 			end
 
+			-- Bag swapping.
+			if
+				_G.CursorHasItem()
+				and inventory:BagSlotButtonHasBag(this)
+				and BsItemInfo:IsContainer(Bagshui.cursorItem)
+			then
+				inventory:SwapBag(Bagshui.cursorItem, this.bagshuiData.bagNum)
+				return
+			end
+
+			-- Call original OnClick.
 			if oldOnClick then
+
+				-- Outfitter's `Outfitter_PaperDollItemSlotButton_OnClick()` makes the assumption that
+				-- it will only ever be called for the exact buttons it has defined. There is never a
+				-- check to verify that `vInventorySlot` isn't nil, and this presents a problem for
+				-- our use of `PaperDollItemSlotButtonTemplate` to build `BagshuiBagsContainerTemplate`.
+				-- When a Bags bag slot is clicked, Outfitter will throw an error from `OutfitterQuickSlots_Open()`:
+				-- ```
+				-- Interface\AddOns\Outfitter\Outfitter.lua:6011: attempt to concatenate local `pSlotName' (a nil value)
+				-- ```
+				-- Luckily we can trick Outfitter into not going down that path by temporarily showing
+				-- the OutfitterQuickSlots frame and then hiding it immediately afterwards.
+				-- https://github.com/veechs/Bagshui/issues/101
+				local outfitterQuickSlotsOldParent = nil
+				if
+					_G.OutfitterQuickSlots
+					and type(_G.OutfitterQuickSlots.IsVisible) == "function"
+					and not _G.OutfitterQuickSlots:IsVisible()
+				then
+					_G.OutfitterQuickSlots:ClearAllPoints()
+					-- Need to re-parent to UIParent so `:IsVisible()` will be true.
+					outfitterQuickSlotsOldParent = _G.OutfitterQuickSlots:GetParent()
+					_G.OutfitterQuickSlots:SetParent(_G.UIParent)
+					_G.OutfitterQuickSlots:Show()
+				end
+
 				oldOnClick()
+
+				-- Undo the Outfitter workaround. 
+				if outfitterQuickSlotsOldParent then
+					_G.OutfitterQuickSlots:SetParent(outfitterQuickSlotsOldParent)
+					_G.OutfitterQuickSlots:Hide()
+				end
+			end
+
+			-- Equipping a new bag should highlight slots immediately.
+			if not hasBag then
+				-- Need a short delay for inventory cache to update.
+				Bagshui:QueueEvent(this:GetScript("OnEnter"), 0.25, nil, this)
 			end
 
 		end)
@@ -317,15 +457,6 @@ end
 -- we need to first call the original function, then make sure our window is up to date.
 ---@param wowApiFunctionName string Hooked WoW API function that triggered this call.
 function Inventory:BagSlotButton_OnHook(wowApiFunctionName)
-	-- A Bagshui item was dropped on the Blizzard action bar's bag slot, which needs
-	-- the same treatment as our own bag slot buttons when it's a bag swap.
-	if
-		wowApiFunctionName == "BagSlotButton_OnClick"
-		and self:BagSwap_TryFromCursor(self.inventoryIdsToContainerIds[_G.this:GetID()])
-	then
-		return
-	end
-
 	-- Don't interfere if this isn't a Bagshui button
 	if not string.find(_G.this:GetName(), self.bagSlotNameFormat) then
 		self.hooks:OriginalHook(wowApiFunctionName)
@@ -463,6 +594,24 @@ function Inventory:ShowBagSlotTooltip(bagSlotButton)
 		)
 	end
 
+	-- Is bag swapping possible based on current free space?
+	if
+		not this.bagshuiData.primary
+		and _G.CursorHasItem()
+		and self:BagSlotButtonHasBag(this)
+		and BsItemInfo:IsContainer(Bagshui.cursorItem)
+	then
+		_G.GameTooltip:AddLine(self:GetBagSlotSwappableText(this.bagshuiData.bagNum))
+		-- Shift+Click to move into bag instead of swapping.
+		_G.GameTooltip:AddLine(
+			string.format(
+				L.Tooltip_Inventory_PlaceBagInBagHint,
+				L.ShiftClick
+			),
+			GRAY_FONT_COLOR.r, GRAY_FONT_COLOR.g, GRAY_FONT_COLOR.b
+		)
+	end
+
 	-- Add hint about locking highlight if there's something in the slot and there are items in the inventory cache.
 	if
 		not self.editMode
@@ -471,6 +620,7 @@ function Inventory:ShowBagSlotTooltip(bagSlotButton)
 			or (self.containers[this.bagshuiData.bagNum].numSlots or 0) > 0
 		)
 		and self.inventory[this.bagshuiData.bagNum]
+		and not self.highlightItemsContainerSlot
 	then
 		_G.GameTooltip:AddLine(
 			string.format(
@@ -485,6 +635,39 @@ function Inventory:ShowBagSlotTooltip(bagSlotButton)
 	-- Use code in Bagshui.Tooltips.lua to show info tooltip.
 	_G.GameTooltip.bagshuiData.infoTooltipAlwayShow = true
 	_G.GameTooltip:Show()
+end
+
+
+
+
+function Inventory:GetBagSlotSwappableText(bagNum, noColors)
+	local text
+	local neededSlots, inventoriesChecked = self:GetAdditionalSlotsNeededToSwapBag(bagNum)
+	if neededSlots > 0 then
+		text = string.format(L.Bag_SlotsNeededToSwap, neededSlots)
+		if
+			-- Other inventory classes that can be used during swapping are configured in this property.
+			type(self.bagSwappingSupplementalStorage) == "table"
+			and table.getn(self.bagSwappingSupplementalStorage) > 0
+		then
+			local supplementalClasses = ""
+			for _, inventoryClassName in ipairs(self.bagSwappingSupplementalStorage) do
+				if not inventoriesChecked[inventoryClassName] then
+					supplementalClasses =
+						(string.len(supplementalClasses) > 0 and "/" or "")
+						.. supplementalClasses .. L[inventoryClassName]
+				end
+			end
+			if string.len(supplementalClasses) > 0 then
+				text =
+					text .. BS_NEWLINE
+					.. (not noColors and LIGHTYELLOW_FONT_COLOR_CODE or "")
+					.. string.format(L.Bag_SupplementalSpaceAvailable, supplementalClasses, self.inventoryTypeLocalized)
+					.. (not noColors and FONT_COLOR_CODE_CLOSE or "")
+			end
+		end
+	end
+	return text
 end
 
 

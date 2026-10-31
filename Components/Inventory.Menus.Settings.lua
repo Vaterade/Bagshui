@@ -80,6 +80,8 @@ function Inventory:FixSettingsMenuPosition(secondPass)
 			-- Trigger second pass position check on next frame update.
 			Bagshui:QueueClassCallback(self, self.FixSettingsMenuPosition, nil, nil, true)
 		else
+			local positionChanged = false
+
 			-- Check to see if the Settings menu has been positioned offscreen horizontally
 			-- or is overlapping the Inventory window, and if so, move it to the other side.
 			if
@@ -90,14 +92,21 @@ function Inventory:FixSettingsMenuPosition(secondPass)
 				)
 			then
 				self.lastSettingsAnchor = BsUtil.FlipAnchorPointComponent(self.lastSettingsAnchor, 2)
-				self.lastSettingsXOffset = self.lastSettingsXOffset * -1
+				self.lastSettingsXOffset = -self.lastSettingsXOffset
+				positionChanged = true
+			end
+
+			-- Vertical adjustment to keep the entire menu onscreen.
+			local yOffset = BsUtil.GetFrameOffscreenAmount(menu, "y")		
+
+			if positionChanged or yOffset ~= 0 then
 				menu:ClearAllPoints()
 				menu:SetPoint(
 					self.lastSettingsAnchor,
 					self.uiFrame,
 					BsUtil.FlipAnchorPointComponent(self.lastSettingsAnchor, 2),
 					self.lastSettingsXOffset,
-					0
+					yOffset
 				)
 			end
 		end
@@ -118,6 +127,9 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 	local level = menuLevel or 1
 	-- Level 1 of menu tables is flat, but submenu tables all have a value key.
 	local menuTable = level > 1 and menuBaseTable.levels[level][menuValue] or menuBaseTable.levels[level]
+
+	-- Pre-colored Control+Alt+Shift+Click hint.
+	local settingResetHint = GRAY_FONT_COLOR_CODE .. L.Setting_Reset_TooltipText .. FONT_COLOR_CODE_CLOSE
 
 	-- Loop through the given settings configuration table.
 	for _, settingInfo in ipairs(configTable) do
@@ -182,9 +194,15 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 				)
 
 			else
+				assert(BsUtil.TableContainsValue(BS_SETTING_TYPE, settingInfo.type), tostring(settingInfo.name) .. " does not have a valid type.")
+
 				-- Now we've found a setting.
 				local settingName = settingInfo.name or ""
 				local settingFriendlyName = settingInfo.title or L[settingInfo.name] or settingInfo.name
+
+				-- There are situations (like an inline CHOICES setting) where we don't actually
+				-- want `menuItem` added because it will be taken care of already.
+				local skipAddingToMenu = false
 
 				-- Base menu item.
 				local menuItem = {
@@ -202,18 +220,22 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 				}
 
 				-- Add scope indicators.
+				local scopeTooltipText = ""
 				if settingInfo.scope == BS_SETTING_SCOPE.ACCOUNT then
-					menuItem.tooltipText =
-						(menuItem.tooltipText and (menuItem.tooltipText .. BS_NEWLINE) or "")
-						.. GRAY_FONT_COLOR_CODE .. L.SettingScope_Account .. FONT_COLOR_CODE_CLOSE
+					scopeTooltipText = L.SettingScope_Account
 					menuItem.icon = BsUtil.GetFullTexturePath("Icons\\Characters")
 					menuItem._bagshuiTextureA = 0.45
 				elseif settingInfo.scope == BS_SETTING_SCOPE.CHARACTER then
-					menuItem.tooltipText =
-						(menuItem.tooltipText and (menuItem.tooltipText .. BS_NEWLINE) or "")
-						.. GRAY_FONT_COLOR_CODE .. L.SettingScope_Character .. FONT_COLOR_CODE_CLOSE
+					scopeTooltipText = L.SettingScope_Character
 					menuItem.icon = BsUtil.GetFullTexturePath("Icons\\Character")
 					menuItem._bagshuiTextureA = 0.45
+				end
+
+				if string.len(scopeTooltipText) > 0 then
+					scopeTooltipText = GRAY_FONT_COLOR_CODE .. scopeTooltipText .. FONT_COLOR_CODE_CLOSE
+					menuItem.tooltipText =
+						(menuItem.tooltipText and (menuItem.tooltipText .. BS_NEWLINE) or "")
+						.. scopeTooltipText
 				end
 
 				-- Choices, numbers, and colors need submenus.
@@ -225,9 +247,12 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 
 					menuItem.hasArrow = true
 					local subLevel = level + 1
+					local subMenu
 
-					menuBaseTable.levels[subLevel][settingInfo.name] = {}
-					local subMenu = menuBaseTable.levels[subLevel][settingInfo.name]
+					if not settingInfo.inline then
+						menuBaseTable.levels[subLevel][settingInfo.name] = {}
+						subMenu = menuBaseTable.levels[subLevel][settingInfo.name]
+					end
 
 					if
 						settingInfo.type == BS_SETTING_TYPE.CHOICES
@@ -277,17 +302,34 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 							-- Static list of choices.
 
 							for _, choice in ipairs(settingInfo.choices) do
+								local choiceTooltipText =
+									choice.tooltipText and (choice.tooltipText .. BS_NEWLINE .. scopeTooltipText)
+									or ((menuItem.tooltipText or "") .. (choice.tooltip and " " .. choice.tooltip or ""))
+								choiceTooltipText =
+									(string.len(choiceTooltipText or "") > 0 and choiceTooltipText .. BS_NEWLINE or "")
+									.. settingResetHint
 								table.insert(
-									subMenu,
+									-- Add at current level or to submenu.
+									
+									settingInfo.inline and menuTable or subMenu,
 									{
 										_bagshuiSettingName = settingInfo.name,
 										text = choice.text or choice.value,
 										value = choice.value,
-										tooltipTitle = menuItem.tooltipTitle,
-										tooltipText = (menuItem.tooltipText or "") .. (choice.tooltip and " " .. choice.tooltip or ""),
+										tooltipTitle = choice.tooltipTitle or menuItem.tooltipTitle,
+										tooltipText = choiceTooltipText,
+										textR = choice.textR,
+										textG = choice.textG,
+										textB = choice.textB,
+										-- Copy scope indicators.
+										icon = menuItem.icon,
+										_bagshuiTextureA = menuItem._bagshuiTextureA,
 									}
 								)
 							end
+
+							-- When inline, don't add the parent menu item because everything is already done.
+							skipAddingToMenu = settingInfo.inline
 
 						end
 
@@ -305,7 +347,10 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 										text = type(settingInfo.valueDisplayFunc) == "function" and settingInfo.valueDisplayFunc(i) or i,
 										value = i,
 										tooltipTitle = menuItem.tooltipTitle,
-										tooltipText = menuItem.tooltipText,
+										tooltipText = (menuItem.tooltipText and menuItem.tooltipText .. BS_NEWLINE or "") .. settingResetHint,
+										-- Copy scope indicators.
+										icon = menuItem.icon,
+										_bagshuiTextureA = menuItem._bagshuiTextureA
 									}
 								)
 							end
@@ -333,7 +378,7 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 					menuItem.tooltipText = settingInfo.nameFunc(menuItem.tooltipText)
 				end
 
-				-- Add the reset hint last because submenu items shouldn't have it, only the parent item.
+				-- Add the reset hint last because submenu items get it as needed.
 				if settingInfo.type ~= BS_SETTING_TYPE.TRIGGER then
 					menuItem.tooltipText =
 						(menuItem.tooltipText and (menuItem.tooltipText .. BS_NEWLINE) or "")
@@ -347,10 +392,12 @@ function Inventory:BuildSettingsMenuFromConfig(configTable, menuBaseTable, menuL
 				menuItem._bagshuiOriginalTooltipTitle = menuItem.tooltipTitle
 				menuItem._bagshuiOriginalTooltipText = menuItem.tooltipText
 
-				table.insert(
-					menuTable,
-					menuItem
-				)
+				if not skipAddingToMenu then
+					table.insert(
+						menuTable,
+						menuItem
+					)
+				end
 			end
 		end
 
@@ -373,6 +420,11 @@ function Inventory:GenerateSettingsMenuItem(menuItem, menu, menuLevel, itemNum, 
 	local currentSettingValue = settingsStorage[settingName]
 	local defaultValue = settingInfo.defaultValue
 	local settingUpdateFunction = menuItem._bagshuiSettingUpdateFunction or emptyFunction
+
+	local disabledByFunc
+	if type(settingInfo.disableFunc) == "function" then
+		disabledByFunc = settingInfo.disableFunc(settingName, settingsStorage)
+	end
 
 	if not self._generateSettingsMenuItem_ResetOnModifierKeys then
 		--- Wrapper for `self:ResetSettingOnModifierKeys()`.
@@ -435,7 +487,7 @@ function Inventory:GenerateSettingsMenuItem(menuItem, menu, menuLevel, itemNum, 
 		-- auto-split menu `func`'set up in `BuildSettingsMenuFromConfig()`.
 		menuItem.value.objectId = menuLevel
 
-	elseif settingInfo.type == BS_SETTING_TYPE.BOOL then
+	elseif settingInfo.type == BS_SETTING_TYPE.BOOLEAN then
 		-- Boolean -- checked/unchecked, toggle setting on click.
 
 		menuItem.checked = settingsStorage[settingName]
@@ -458,13 +510,20 @@ function Inventory:GenerateSettingsMenuItem(menuItem, menu, menuLevel, itemNum, 
 		if menuItem.value and not menuItem.hasArrow then
 			-- Inside submenu -- checked/unchecked based on current value, change setting on click.
 			-- Need to use tostring() here so we don't get caught by float nonsense where 1 somehow doesn't equal 1.
-			menuItem.checked = tostring(menuItem.value) == tostring(currentSettingValue)
-			menuItem.keepShownOnClick = false
+			menuItem.checked =
+				type(settingInfo.choicesCheckedFunc) == "function" and settingInfo.choicesCheckedFunc(settingName, settingsStorage, menuItem.value)
+				or tostring(menuItem.value) == tostring(currentSettingValue)
+			menuItem.keepShownOnClick = true
 			menuItem.func = function()
-				Bagshui:CloseMenus(_G.UIDROPDOWNMENU_MENU_LEVEL, nil, true)
-				settingsStorage[settingName] = _G.this.value
-				settingUpdateFunction()
-				self.menus:Refresh(menuLevel, -1)
+				if not self:ResetSettingOnModifierKeys(menuItem.arg1, nil, true) then
+					settingsStorage[settingName] = _G.this.value
+					settingUpdateFunction()
+					self.menus:Refresh()
+					self.menus:Refresh(menuLevel, true)
+				end
+			end
+			if disabledByFunc ~= nil then
+				menuItem.disabled = true
 			end
 		else
 			-- Parent menu item to open the submenu.
@@ -507,7 +566,7 @@ function Inventory:GenerateSettingsMenuItem(menuItem, menu, menuLevel, itemNum, 
 					Bagshui:CloseMenus(_G.UIDROPDOWNMENU_MENU_LEVEL, nil, true)
 					settingsStorage[settingName] = color
 					settingUpdateFunction()
-					self.menus:Refresh(menuLevel, -1)
+					self.menus:Refresh(menuLevel, true)
 					self:AddToColorHistory(color)
 				end
 				menuItem._bagshuiColorSwatchFunc = menuItem.func
@@ -624,8 +683,8 @@ function Inventory:GenerateSettingsMenuItem(menuItem, menu, menuLevel, itemNum, 
 	end
 
 	-- Decide whether the menu item should be disabled.
-	if type(settingInfo.disableFunc) == "function" then
-		menuItem.disabled = settingInfo.disableFunc(settingName, settingsStorage)
+	if disabledByFunc ~= nil then
+		menuItem.disabled = disabledByFunc
 	end
 
 end

@@ -613,14 +613,14 @@ end
 
 
 --- Redraw an open menu at the given level.
----@param level number Menu level to refresh.
----@param levelAdjustment number Add to _G.UIDROPDOWNMENU_MENU_LEVEL instead of passing a specific level.
-function Menus:Refresh(level, levelAdjustment)
-	level = (level or _G.UIDROPDOWNMENU_MENU_LEVEL) + (levelAdjustment or 0)
+---@param level number? Menu level to refresh. Defaults to _G.UIDROPDOWNMENU_MENU_LEVEL.
+---@param refreshParent boolean? Also refresh the next level up.
+function Menus:Refresh(level, refreshParent)
+	level = (level or _G.UIDROPDOWNMENU_MENU_LEVEL)
 
 	-- Do refresh on next frame to ensure new values are picked up.
 	if not self.refresh then
-		Bagshui:QueueClassCallback(self, self.Refresh, nil, nil, level)
+		Bagshui:QueueClassCallback(self, self.Refresh, nil, nil, level, refreshParent)
 
 		-- Set flag so that we know the callback has been queued and LoadMenu()
 		-- knows to pull from self.recentLevelValues.
@@ -647,6 +647,11 @@ function Menus:Refresh(level, levelAdjustment)
 	-- Reset frame and call initialization function to re-populate buttons.
 	Bagshui.menuFrame:SetHeight(_G.UIDROPDOWNMENU_BUTTON_HEIGHT * 2)
 	Bagshui.menuFrame.initialize(level)
+
+	-- Only refresh parent level if it's feasible.
+	if refreshParent and level > 1 then
+		self:Refresh(level - 1)
+	end
 
 	-- Reset flag.
 	self.refresh = false
@@ -741,7 +746,7 @@ function Menus:PrepareAutoSplitMenu(menuValue)
 	local objectId = menuValue.objectId
 
 	---@type any[]? Actual list of items potentially contained in the menu. Passed as the second parameter to omitFunc so item properties can be looked up.
-	local itemList = autoSplitMenuParams.itemList
+	local itemList = menuValue.itemList or autoSplitMenuParams.itemList
 
 	---@type any[] List of item IDs with which to populate the menu.
 	local idList = menuValue.idList or autoSplitMenuParams.defaultIdList
@@ -791,6 +796,7 @@ function Menus:PrepareAutoSplitMenu(menuValue)
 	local disableFunc = menuValue.disableFunc
 
 	---@type function? Decide whether the menu entry for a given item should be omitted.
+	--- NOT CALLED unless `itemList` is provided.
 	---```
 	--- ---@param itemId any ID of the item the menu entry represents.
 	--- ---@param menuItem table? `itemList`, if available.
@@ -834,8 +840,8 @@ function Menus:PrepareAutoSplitMenu(menuValue)
 			BsUtil.TableContainsValue(idsToOmit, id) == nil
 			-- Call omitFunc() if present.
 			and (
-				not omitFunc
-				or (type(itemList) == "table" and not omitFunc(id, itemList))
+				(type(omitFunc) ~= "function" or type(itemList) ~= "table")
+				or not omitFunc(id, itemList)
 			)
 		then
 			table.insert(idListSorted, id)
@@ -1281,8 +1287,10 @@ end
 function Menus:BuildAutoSplitSubmenuRangeTexts(startItemName, endItemName, previousStartText, textLengthStart)
 	local submenuTextCharCount = textLengthStart or 0
 	local startText, endText
+	local tries = 0
 
 	repeat
+		tries = tries + 1
 		submenuTextCharCount = submenuTextCharCount + 1
 
 		-- The first entry needs to take into account what we figured out during the previous loop to avoid
@@ -1295,9 +1303,12 @@ function Menus:BuildAutoSplitSubmenuRangeTexts(startItemName, endItemName, previ
 		endText = BsUtil.Utf8Sub(endItemName, 1, submenuTextCharCount)
 
 		-- Remove punctuation from ends of strings if it doesn't make them the same.
-		if startText ~= endText then
-			local startWithoutTrailingPunctuation = string.gsub(startText, "%W+$", "")
-			local endWithoutTrailingPunctuation = string.gsub(endText, "%W+$", "")
+		if
+			startText ~= endText
+		then
+			-- Don't strip punctuation if the string is ALL punctuation.
+			local startWithoutTrailingPunctuation = not string.find(startText, "^%p+$") and string.gsub(startText, "%W+$", "") or startText
+			local endWithoutTrailingPunctuation = not string.find(endText, "^%p+$") and string.gsub(endText, "%W+$", "") or endText
 			if startWithoutTrailingPunctuation ~= endWithoutTrailingPunctuation then
 				startText = startWithoutTrailingPunctuation
 				endText = endWithoutTrailingPunctuation
@@ -1310,14 +1321,16 @@ function Menus:BuildAutoSplitSubmenuRangeTexts(startItemName, endItemName, previ
 			-- Ensure endText isn't just the beginning of startText
 			and not string.find(startText, "^" .. string.gsub(endText, "(%W)", "%%%1"))
 			-- Ensure items don't end with punctuation where possible
-			and string.find(startText, "[^%p]$")
-			and string.find(endText, "[^%p]$")
+			and (string.find(startText, "[^%p]$") or string.find(startText, "^%p+$"))
+			and (string.find(endText, "[^%p]$") or string.find(endText, "^%p+$"))
 		)
 		or
 		(
 			startText == startItemName
 			and endText == endItemName
 		)
+		-- Safeguard: Prevent an infinite loop.
+		or tries >= 500
 	)
 	return startText, endText
 end

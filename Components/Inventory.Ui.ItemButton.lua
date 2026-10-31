@@ -5,20 +5,6 @@ local Inventory = Bagshui.prototypes.Inventory
 local InventoryUi = Bagshui.prototypes.InventoryUi
 
 
--- Disabled in favor of ContainerFrameItemButton_OnClick().
--- local function ItemButton_SplitStack(button, split)
--- 	-- These functions are NOT captured into the Bagshui environment to ensure that if they're
--- 	-- hooked by another addon, we call the hooked version instead of the original.
--- 	_G.SplitContainerItem(button.bagshuiData.bagNum, button.bagshuiData.slotNum, split)
--- 	-- Instead of redefining the button.SplitStack function every time,
--- 	-- we're using an additional property to track whether this is a
--- 	-- right-click sell split at the merchant or a normal one.
--- 	if button.bagshuiData.splitStackAtMerchant then
--- 		_G.MerchantItemButton_OnClick("LeftButton")
--- 	end
--- end
-
-
 --- Special OnHide for Inventory item slot buttons to also hide tooltips and
 --- the stack split frame.
 local function InventoryItemButton_OnHide()
@@ -103,38 +89,152 @@ function InventoryUi:CreateInventoryItemSlotButton(buttonNum)
 			slotButton:SetScript("OnLeave", inventory._itemSlotButton_ScriptWrapper_OnLeave)
 			slotButton:SetScript("OnHide", InventoryItemButton_OnHide)
 
-			-- SplitStack() as a button property is required to reuse Blizzard's OpenStackSplitFrame().
-			-- Disabled in favor of ContainerFrameItemButton_OnClick().
-			-- slotButton.SplitStack = ItemButton_SplitStack
+			self:AddItemSlotButtonGetIdProxy(slotButton)
 		end
 	)
 end
 
 
 
+--- ### Now it's time for fun with metatables!
+--- 
+--- We have a little problem when it comes to ensuring maximum interoperability
+--- and compatibility with other addons and it's called GetID(). See, the
+--- Blizzard code in ContainerFrameItemButton_OnClick/OnEnter uses
+--- <itemButton>:GetParent():GetID()and <itemButton>:GetID() to determine
+--- bag and slot number, respectively. We need to call those functions
+--- because they're hooked by other addons (which probably should be hooking
+--- other things instead, but we can't do anything about that).
+--- 
+--- Slot number isn't an issue -- we can easily and safely set that in
+--- OnEnter (and OnClick). Bag number is a problem though, because slots
+--- from different bags are going to share the same parent (Group) frame.
+--- This means that if you click an item and then mouse over another before
+--- the <itemButton>:GetParent():GetID() call is made, the wrong bag
+--- number is likely to be returned.
+--- 
+--- The bag number problem was first identified with stack splitting,
+--- so a solution that only applied to stack splitting was put in place.
+--- A more generalized approach is desirable though, and so here it is.
+--- 
+--- The code below sets up two proxy frames that are outfitted with metatables
+--- so that they act as if they are the item button, but with overridden
+--- functions that give us what we need to ensure code outside our control
+--- receives the correct bag and slot numbers.
+---
+--- These proxies are picked up by Inventory:ItemButton_OnClick/OnEnter()
+--- and set up so Blizzard's GetID() calls will be intercepted and redirected
+--- to our custom functions.
+--- 
+--- (Now it's entirely possible there's a simpler way to do this, and
+--- if there is, I'd love to know it. There were past experiments with
+--- intermediate parent frames, but frame levels between item buttons
+--- and groups are slightly finicky and led to item buttons disappearing.
+--- Another attempt was made along those lines in the disastrous 1.2.17
+--- release. So having something that works is and doesn't seem to cause
+--- any side effects is preferable.)
+--- 
+--- ### All that to say...
+--- What this function does is create a proxy button frame and assign it to the
+--- `slotButton.bagshuiData.getIdProxy' property. It's then available for other
+--- code to use and pass upstream (or is it downstream?) to Blizzard code.
+---@param slotButton table Button to create proxy frames for.
+function InventoryUi:AddItemSlotButtonGetIdProxy(slotButton)
+	if not slotButton.bagshuiData then
+		slotButton.bagshuiData = {}
+	end
+
+	-- Proxy for `slotButton` that was created above.
+	-- Will override `GetID()` and `GetParent()`.
+	local slotButtonProxy = _G.CreateFrame("Button")
+	-- Store the proxy so it can be used by `Inventory:ItemButton_OnClick/OnEnter()`
+	slotButton.bagshuiData.getIdProxy = slotButtonProxy
+	-- Proxy for `slotButton`'s parent frame.
+	-- Will override `GetID()` only.
+	local parentProxy = _G.CreateFrame("Frame")
+	-- Reference to `slotButton`'s actual parent frame, updated
+	-- by `getItemButtonParent()`.
+	local realParent
+
+	--- Proxy function for `slotButton:GetID()`.
+	--- Always returns the slot number of the item assigned to the button.
+	local function getItemSlot(_)
+		return slotButton.bagshuiData.slotNum
+	end
+
+	--- Proxy function for `slotButton:GetParent()`.
+	--- Stores the real parent frame so the metatable knows where to
+	--- redirect everything other than GetID().
+	local function getItemButtonParent(_)
+		realParent = slotButton:GetParent()
+		-- Update userdata property of proxy frame.
+		parentProxy[0] = realParent[0]
+		return parentProxy
+	end
+
+	--- Proxy function for `slotButton:GetParent():GetID()`.
+	--- Always returns the bag number of the item assigned to the button.
+	local function getItemBag(_)
+		return slotButton.bagshuiData.bagNum
+	end
+
+	-- Metatable that makes `slotButtonProxy` work.
+	local slotButtonMetatable = {
+		__index = function(_, key)
+			if key == "GetID" then
+				return getItemSlot
+			elseif key == "GetParent" then
+				return getItemButtonParent
+			else
+				return slotButton[key]
+			end
+		end,
+		__newindex = function(_, key, val)
+			slotButton[key] = val
+		end,
+	}
+	setmetatable(slotButtonProxy, slotButtonMetatable)
+	-- Redirect frame userdata to avoid errors.
+	-- Credit: https://www.wowinterface.com/forums/showthread.php?t=53928
+	slotButtonProxy[0] = slotButton[0]
+
+	-- Metatable that makes `parentProxy` work.
+	local parentMetatable = {
+		__index = function(_, key)
+			if key == "GetID" then
+				return getItemBag
+			else
+				return realParent[key]
+			end
+		end,
+		__newindex = function(_, key, val)
+			realParent[key] = val
+		end,
+	}
+	-- The userdata (table key 0) is updated in getItemButtonParent() since it changes.
+	setmetatable(parentProxy, parentMetatable)
+end
+
+
+
+
 --- OnEnter mostly handles tooltip stuff.
 ---@param itemButton table? Item slot button widget.
 function Inventory:ItemButton_OnEnter(itemButton)
-	local this = itemButton or _G.this
+	itemButton = itemButton or _G.this
 
 	-- Cases when nothing should happen.
 	if
 		-- OnEnter still fires even if mouse events are disabled so we need to avoid doing anything when we're in that state.
-		not this:IsMouseEnabled()
+		not itemButton:IsMouseEnabled()
 		-- Don't pop up tooltips or do anything else when a menu is open.
 		or self.menus:IsMenuOpen()
 	then
 		return
 	end
 
-	local buttonInfo = this.bagshuiData
-	local item = this.bagshuiData.item or self.inventory[buttonInfo.bagNum][buttonInfo.slotNum]
-
-	-- Update IDs so ContainerFrameItemButton_OnEnter() will work.
-	-- Disabled because we're currently not actually calling ContainerFrameItemButton_OnEnter,
-	-- but this could probably be added in the future if it's found to be necessary for compatibility
-	-- with other addons.
-	-- self:UpdateItemButtonIDs(this, item)
+	local buttonInfo = itemButton.bagshuiData
+	local item = itemButton.bagshuiData.item or self.inventory[buttonInfo.bagNum][buttonInfo.slotNum]
 
 	-- Record that the mouse has moved over this button (used by OnUpdate to determine
 	-- whether the tooltip should be shown when the Edit Mode cursor puts down an item).
@@ -163,7 +263,10 @@ function Inventory:ItemButton_OnEnter(itemButton)
 
 
 	-- Turn off the Bagshui tooltip hint once Alt is held.
-	if not self.settings.hint_bagshuiTooltip and _G.IsAltKeyDown() then
+	if
+		not self.settings.hint_bagshuiTooltip
+		and _G.IsAltKeyDown()
+	then
 		self.settings.hint_bagshuiTooltip = true
 	end
 
@@ -180,7 +283,7 @@ function Inventory:ItemButton_OnEnter(itemButton)
 		(BS_INVENTORY_TRUNCATE_TOOLTIPS_EDIT_MODE and self.editMode)
 		or (BS_INVENTORY_TRUNCATE_TOOLTIPS_INFO_MODE and _G.IsAltKeyDown())
 	)
-	-- - Empty slots get a tooltip too.
+	-- Empty slots deserve a tooltip too sometimes.
 	local displayTooltipForEmptySlots = (_G.IsAltKeyDown() or self.editMode)
 
 	-- When Alt is held in Edit Mode, swap from the Category tooltip to the Item tooltip.
@@ -188,11 +291,13 @@ function Inventory:ItemButton_OnEnter(itemButton)
 
 	-- GameTooltip normally anchors to item frame, but in Edit Mode it attaches to the group frame.
 	local gameTooltipAnchorPoint = BsUtil.FlipAnchorPoint(self.settings.windowAnchorXPoint)
-	local tooltipAnchorFrame = self.editMode and this:GetParent() or this
+	local tooltipAnchorFrame = self.editMode and itemButton:GetParent() or itemButton
 	local tooltipOffset = BsSkin.tooltipExtraOffset
+	_G.GameTooltip:ClearAllPoints()
 	_G.GameTooltip:SetOwner(
-		this,
-		-- Using ANCHOR_PRESERVE here for Edit Mode so pfUI doesn't mess with the position.
+		itemButton,
+		-- Using ANCHOR_PRESERVE here for Edit Mode instead of ANCHOR_NONE
+		-- so pfUI doesn't mess with the position.
 		"ANCHOR_" .. (self.editMode and "PRESERVE" or gameTooltipAnchorPoint),
 		-tooltipOffset,
 		tooltipOffset
@@ -207,8 +312,13 @@ function Inventory:ItemButton_OnEnter(itemButton)
 		)
 	end
 
+	-- When true, the class instance had a `itemSlotTooltipFunction` defined
+	-- and we need to reapply our preferred tooltip position.
+	local setTooltipPositionAgain = false
 
-	-- Populate GameTooltip with Item or Category information.
+
+	-- Populate GameTooltip with Item or Edit Mode information, as appropriate.
+
 	if not self.editMode or editModeShowItemTooltip then
 		-- Item tooltip outside Edit Mode, or if Alt is held in Edit Mode.
 
@@ -253,8 +363,42 @@ function Inventory:ItemButton_OnEnter(itemButton)
 			-- These will be populated with the return values of ItemInfo:LoadTooltip().
 			local hasCooldown, repairCost
 
-			-- Get the tooltip.
+			-- Populate the tooltip.
+			-- There doesn't seem to be a way to get hasCooldown/repairCost without
+			-- loading the tooltip, so we have to call this even if there's an
+			-- itemSlotTooltipFunction that's going to load it again.
 			hasCooldown, repairCost = BsItemInfo:LoadTooltip(_G.GameTooltip, item, self)
+
+			-- This class instance has a custom tooltip loading function.
+			-- Spoiler: It's probably ContainerFrameItemButton_OnEnter().
+			-- (itemSlotTooltipFunction is the function name, not the actual function
+			-- see declaration in Inventory.lua for reasoning.)
+			if
+				self.online  -- Definitely have to be online for this.
+				and not self.editMode  -- Not calling in Edit Mode so we cut out some hooks and have a little more control.
+				and not truncateTooltip  -- Also, we don't need extra stuff if we're just going to truncate anyway.
+				and self.itemSlotTooltipFunction
+				and type(_G[self.itemSlotTooltipFunction]) == "function"
+			then
+				-- Ugh, this is stupid, but the GFW tooltip hooking code doesn't
+				-- have `ContainerFrameItemButton_OnEnter()`'s button parameter,
+				-- so the Blizzard function ends up pulling the global `this`
+				-- instead of the passed parameter. When `Inventory:ItemSlotAndGroupMouseOverCheck()`
+				-- calls us, global `this` isn't the item slot button and
+				-- `ContainerFrameItemButton_OnEnter()`'s call to `GetRight()`
+				-- returns nil, throwing an error. We can work around their bug by
+				-- temporarily changing the value of global `this`, then restoring it.
+				local oldGlobalThis = _G.this
+				-- In addition to the above, we need to use our metatable'd proxy frame
+				-- (set up in InventoryUi:CreateInventoryItemSlotButton()) so the
+				-- GetID() and GetParent():GetID() functions will be overridden.
+				_G.this = itemButton.bagshuiData.getIdProxy or _G.this
+				_G[self.itemSlotTooltipFunction](itemButton.bagshuiData.getIdProxy)
+				_G.this = oldGlobalThis
+				-- `ContainerFrameItemButton_OnEnter()` will change the tooltip position
+				-- to something that ignores our custom offsets, so we need to fix that.
+				setTooltipPositionAgain = true
+			end
 
 			-- There are situations where we may want to truncate the tooltip
 			-- at the first empty line to leave more room for the Bagshui tooltip.
@@ -322,12 +466,11 @@ function Inventory:ItemButton_OnEnter(itemButton)
 					_G.GameTooltip:AddLine(_G.TEXT(_G.REPAIR_COST), 1, 1, 1)
 					_G.SetTooltipMoney(_G.GameTooltip, repairCost)
 
-
-				elseif self.ui:IsFrameVisible(_G.MerchantFrame) then
-					-- At merchant.
+				elseif self.ui:IsFrameVisible(_G.MerchantFrame) and _G.MerchantFrame.selectedTab ~= 2 then
+					-- At merchant (not on buyback tab).
 					_G.ShowContainerSellCursor(item.bagNum, item.slotNum)
 
-				elseif (item.readable or (_G.IsControlKeyDown() and not _G.IsAltKeyDown())) and item.emptySlot ~= 1 then
+				elseif (item.readable == 1 or (_G.IsControlKeyDown() and not _G.IsAltKeyDown())) and item.emptySlot ~= 1 then
 					-- Readable items (books, etc) / Control key dressup.
 					_G.ShowInspectCursor()
 
@@ -354,10 +497,18 @@ function Inventory:ItemButton_OnEnter(itemButton)
 
 
 	-- Bagshui Info Tooltip
-	if self.editMode or _G.IsAltKeyDown() then
+	if
+		self.editMode
+		or _G.IsAltKeyDown()
+		or (
+			BsSettings.showInfoTooltipsWithoutAlt
+			and not _G.IsShiftKeyDown()
+		)
+		or self.itemPendingSale
+	then
 
 		-- 4th parameter: Always place the info tooltip under GameTooltip in edit mode.
-		Bagshui:SetInfoTooltipPosition(this, true, self.editMode)
+		Bagshui:SetInfoTooltipPosition(itemButton, true, self.editMode)
 
 		if not self.editMode then
 
@@ -365,53 +516,65 @@ function Inventory:ItemButton_OnEnter(itemButton)
 			if not buttonInfo.isEmptySlotStack then
 
 				-- Populate the tooltip.
-				if _G.IsControlKeyDown() then
+				if
+					_G.IsControlKeyDown()
+					and not self.itemPendingSale
+				then
 					-- All item properties.
 					BsItemInfo:AddTooltipInfo(item, BsInfoTooltip)
 
 				else
 					-- Normal mode.
 
-					-- We only want blank lines between sections after one section has been added.
-					local spacerNeeded = false
+					-- Sell protection confirmation instructions.
+					if
+						self.ui:IsFrameVisible("MerchantFrame")
+						and self.itemPendingSale == item
+					then
+						self:AddBagshuiInfoTooltipLine(BS_FONT_COLOR.UI_ORANGE .. L.Inventory_Item_SellProtection_ConfirmSale .. FONT_COLOR_CODE_CLOSE)
+						self:AddBagshuiInfoTooltipLine(LIGHTYELLOW_FONT_COLOR_CODE .. string.format(L.Inventory_Item_SellProtection_Reason, self:GetItemSellProtectionReason(item)) .. FONT_COLOR_CODE_CLOSE)
+						self:AddBagshuiInfoTooltipLine(GRAY_FONT_COLOR_CODE .. L.Inventory_Item_SellProtection_OverrideHint .. FONT_COLOR_CODE_CLOSE)
+					end
 
 					-- Inventory counts.
-					spacerNeeded = BsCatalog:AddTooltipInfo(item.itemString, BsInfoTooltip)
+					BsCatalog:AddTooltipInfo(item.itemString, BsInfoTooltip)
 
-					-- Active quest info.
-					if Bagshui.activeQuestItems[item.name] then
-						if spacerNeeded then
+					-- Only show more in-depth info when Alt is held, even if showInfoTooltipsWithoutAlt is on.
+					if _G.IsAltKeyDown() then
+
+						-- Active quest info.
+						if Bagshui.activeQuestItems[item.name] then
+							if BsInfoTooltip:NumLines() > 0 then
+								self:AddBagshuiInfoTooltipLine(" ")
+							end
+							self:AddBagshuiInfoTooltipLine(tostring(Bagshui.activeQuestItems[item.name].obtained or "?") .. "/" .. tostring(Bagshui.activeQuestItems[item.name].needed or "?"), string.format(L.Symbol_Colon, L.ItemPropFriendly_activeQuest))
+						end
+
+						-- Stock state.
+						if
+							(item.bagshuiDate or 0) > 0
+							and item.bagshuiStockState ~= nil
+							and item.bagshuiStockState ~= BS_ITEM_STOCK_STATE.NO_CHANGE
+						then
+							if BsInfoTooltip:NumLines() > 0 then
+								self:AddBagshuiInfoTooltipLine(" ")
+							end
+							self:AddBagshuiInfoTooltipLine(L["Stock_" .. item.bagshuiStockState], string.format(L.Symbol_Colon, L.StockState))
+							self:AddBagshuiInfoTooltipLine(BsUtil.FormatTimeRemainingString(_G.time() - item.bagshuiDate), string.format(L.Symbol_Colon, L.StockLastChange))
+						end
+
+						-- Assigned category and bag name.
+						if BsInfoTooltip:NumLines() > 0 then
 							self:AddBagshuiInfoTooltipLine(" ")
 						end
-						self:AddBagshuiInfoTooltipLine(tostring(Bagshui.activeQuestItems[item.name].obtained or "?") .. "/" .. tostring(Bagshui.activeQuestItems[item.name].needed or "?"), string.format(L.Symbol_Colon, L.ItemPropFriendly_activeQuest))
-						spacerNeeded = true
-					end
+						self:AddBagshuiInfoTooltipLine((BsCategories:GetName(item.bagshuiCategoryId) or L.Error_ItemCategoryUnknown), string.format(L.Symbol_Colon, L.Category), false)
+						self:AddBagshuiInfoTooltipLine((self.containers[item.bagNum].name or L.Unknown), string.format(L.Symbol_Colon, L.Bag))
 
-					-- Stock state.
-					if
-						(item.bagshuiDate or 0) > 0
-						and item.bagshuiStockState ~= nil
-						and item.bagshuiStockState ~= BS_ITEM_STOCK_STATE.NO_CHANGE
-					then
-						if spacerNeeded then
-							self:AddBagshuiInfoTooltipLine(" ")
-						end
-						self:AddBagshuiInfoTooltipLine(L["Stock_" .. item.bagshuiStockState], string.format(L.Symbol_Colon, L.StockState))
-						self:AddBagshuiInfoTooltipLine(BsUtil.FormatTimeRemainingString(_G.time() - item.bagshuiDate), string.format(L.Symbol_Colon, L.StockLastChange))
-						spacerNeeded = true
-					end
-
-					-- Assigned category and bag name.
-					if spacerNeeded then
+						-- Instructions.
 						self:AddBagshuiInfoTooltipLine(" ")
+						self:AddBagshuiInfoTooltipLine(L.AltRightClick, string.format(L.Symbol_Colon, string.format(L.Suffix_Menu, L.Item)))
+						self:AddBagshuiInfoTooltipLine(L.HoldControlAlt, string.format(L.Symbol_Colon, L.MoreInformation))
 					end
-					self:AddBagshuiInfoTooltipLine((BsCategories:GetName(item.bagshuiCategoryId) or L.Error_ItemCategoryUnknown), string.format(L.Symbol_Colon, L.Category), false)
-					self:AddBagshuiInfoTooltipLine((self.containers[item.bagNum].name or L.Unknown), string.format(L.Symbol_Colon, L.Bag))
-
-					-- Instructions.
-					self:AddBagshuiInfoTooltipLine(" ")
-					self:AddBagshuiInfoTooltipLine(L.AltRightClick, string.format(L.Symbol_Colon, string.format(L.Suffix_Menu, L.Item)))
-					self:AddBagshuiInfoTooltipLine(L.HoldControlAlt, string.format(L.Symbol_Colon, L.MoreInformation))
 				end
 
 			end
@@ -458,7 +621,7 @@ function Inventory:ItemButton_OnEnter(itemButton)
 
 	elseif not self.settings.hint_bagshuiTooltip then
 		-- Show tip about holding alt to display Bagshui info tooltip.
-		Bagshui:SetInfoTooltipPosition(this, true)
+		Bagshui:SetInfoTooltipPosition(itemButton, true)
 		self:AddBagshuiInfoTooltipLine(L.HoldAlt, string.format(L.Symbol_Colon, L.BagshuiTooltipIntro))
 
 	else
@@ -467,14 +630,14 @@ function Inventory:ItemButton_OnEnter(itemButton)
 	end
 
 	-- Normal tooltip.
-	if _G.GameTooltip:NumLines() > 0 then
+	if _G.GameTooltip:NumLines() > 0 or _G.GameTooltip:IsVisible() then
 		-- Quality color tooltip borders (currently a hidden setting).
 		if
 			self.settings.qualityColorTooltipBorders
 			and type(buttonInfo.qualityColor) == "table"
 			and item.quality > -1
-			and this.bagshuiData.buttonComponents
-			and this.bagshuiData.buttonComponents.border
+			and itemButton.bagshuiData.buttonComponents
+			and itemButton.bagshuiData.buttonComponents.border
 		then
 			_G.GameTooltip:SetBackdropBorderColor(
 				buttonInfo.qualityColor.r,
@@ -482,6 +645,20 @@ function Inventory:ItemButton_OnEnter(itemButton)
 				buttonInfo.qualityColor.b
 			)
 		end
+
+		-- Need to reapply customized tooltip position.
+		-- See setTooltipPositionAgain declaration for details.
+		if setTooltipPositionAgain then
+			_G.GameTooltip:ClearAllPoints()
+			_G.GameTooltip:SetPoint(
+				"BOTTOM" .. BsUtil.FlipAnchorPoint(gameTooltipAnchorPoint),
+				tooltipAnchorFrame,
+				"TOP" .. gameTooltipAnchorPoint,
+				-tooltipOffset,
+				tooltipOffset
+			)
+		end
+
 		_G.GameTooltip:Show()
 	else
 		_G.GameTooltip:Hide()
@@ -541,8 +718,8 @@ end
 
 
 --- OnLeave: Reset everything and hide the tooltip.
-function Inventory:ItemButton_OnLeave()
-	local this = _G.this
+function Inventory:ItemButton_OnLeave(itemButton)
+	itemButton = itemButton or _G.this
 
 	-- Clear Edit Mode category highlighting.
 	if self.editState.cursorItemType ~= BS_INVENTORY_OBJECT_TYPE.CATEGORY or self.editState.cursorItem == nil then
@@ -553,19 +730,19 @@ function Inventory:ItemButton_OnLeave()
 	end
 
 	-- Reset tracking properties.
-	this.bagshuiData.tooltipCooldownUpdate = nil
-	this.bagshuiData.altKeyDown = nil
-	this.bagshuiData.controlKeyDown = nil
-	this.bagshuiData.shiftKeyDown = nil
+	itemButton.bagshuiData.tooltipCooldownUpdate = nil
+	itemButton.bagshuiData.altKeyDown = nil
+	itemButton.bagshuiData.controlKeyDown = nil
+	itemButton.bagshuiData.shiftKeyDown = nil
 
 	-- Record that the mouse has left this button (used by OnUpdate to determine
 	-- whether the tooltip should be shown when the Edit Mode cursor puts down an item).
 	-- This is used instead of MouseIsOver() because that function returns true
 	-- even when the frame is behind other frames.
-	this.bagshuiData.mouseIsOver = false
+	itemButton.bagshuiData.mouseIsOver = false
 
 	-- Hide the main tooltip.
-	if _G.GameTooltip:IsOwned(this) then
+	if _G.GameTooltip:IsOwned(itemButton) then
 		_G.GameTooltip:Hide()
 		-- Go back to the normal cursor unless the Edit Mode cursor is holding something.
 		if not BsCursorTooltip:IsVisible() then
@@ -574,7 +751,7 @@ function Inventory:ItemButton_OnLeave()
 	end
 
 	-- Hide our tooltip.
-	if BsInfoTooltip:IsOwned(this) then
+	if BsInfoTooltip:IsOwned(itemButton) then
 		BsInfoTooltip:Hide()
 	end
 
@@ -690,13 +867,10 @@ end
 ---@param mouseButton string
 ---@param isDrag number|nil|boolean
 function Inventory:ItemButton_OnClick(mouseButton, isDrag)
-	local this = _G.this
+	local itemButton = _G.this
 
-	local buttonInfo = this.bagshuiData
+	local buttonInfo = itemButton.bagshuiData
 	local item = self.inventory[buttonInfo.bagNum][buttonInfo.slotNum]
-
-	-- Update IDs so ContainerFrameItemButton_OnClick() will work.
-	self:UpdateItemButtonIDs(this, item)
 
 	-- Nothing normal should happen in Edit Mode.
 	if self.editMode then
@@ -741,7 +915,9 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 		if item then
 
 			-- Clear stock state when interacting with an item.
-			item.bagshuiDate = -1
+			if self.settings.itemStockChangeClearOnInteract then
+				item.bagshuiDate = -1
+			end
 
 			-- Flip the expandEmptySlotStacks flag when clicking empty slots if stacking is enabled.
 			if
@@ -759,6 +935,28 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 
 			-- Can't do anything else offline.
 			if not self.online then
+				return
+			end
+
+			-- Reset pending item sale.
+			if
+				self.itemPendingSale
+				and (
+					mouseButton == "LeftButton"
+					or self.itemPendingSale ~= item
+				)
+			then
+				self:ClearItemPendingSale(itemButton)
+				return
+			end
+
+			-- Bag swapping.
+			if
+				Bagshui.cursorBagSlotNum
+				and BsItemInfo:IsContainer(item)
+				and self.inventoryIdsToContainerIds[Bagshui.cursorBagSlotNum]
+			then
+				self:SwapBag(item, self.inventoryIdsToContainerIds[Bagshui.cursorBagSlotNum])
 				return
 			end
 
@@ -781,11 +979,57 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 
 			elseif
 				-- Item information menu Alt+right-click blocks everything else.
-				mouseButton == "RightButton" and _G.IsAltKeyDown()
+				mouseButton == "RightButton"
+				and _G.IsAltKeyDown()
+				and not _G.IsControlKeyDown()
+				and not _G.IsShiftKeyDown()
 			then
 				self.menus:OpenMenu("Item", item, nil, "cursor")
 				-- Makes sense to return here since there's no need for a window update.
 				return
+
+
+			elseif
+				-- Sell protection: Trigger confirmation prompt.
+				self.ui:IsFrameVisible("MerchantFrame")
+				and mouseButton == "RightButton"
+				and not _G.IsControlKeyDown()
+				and not (
+					_G.IsControlKeyDown()
+					and _G.IsAltKeyDown()
+					and _G.IsShiftKeyDown()
+				)
+				and self:GetItemSellProtectionReason(item)
+			then
+				self.itemPendingSale = item
+				self.highlightItemsInContainerId = item.bagNum
+				self.highlightItemsContainerSlot = item.slotNum
+				self:ItemButton_OnEnter(itemButton)
+				self:UpdateItemSlotColors()
+				-- Don't let default actions happen because we don't want the tooltip hidden.
+				return
+
+
+			elseif
+				-- Sell protection: Sale confirmed.
+				self.ui:IsFrameVisible("MerchantFrame")
+				and (
+					-- Confirming the previously-selected item.
+					(
+						self.itemPendingSale == item
+						and mouseButton == "RightButton"
+						and _G.IsControlKeyDown()
+					)
+					or
+					-- All modifiers down to bypass sale protection.
+					(
+						_G.IsControlKeyDown()
+						and _G.IsAltKeyDown()
+						and _G.IsShiftKeyDown()
+					)
+				)
+			then
+				self:ContainerItemAction(item, "Use", false)
 
 
 			elseif
@@ -837,6 +1081,39 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 			then
 				-- Pretend Alt is down so their code will do the item attachment work.
 				self:ContainerItemAction(item, "Pickup", true)
+
+
+			elseif
+				-- "Old" Aux <https://github.com/mrrosh/aux-addon_old-interface/>.
+				-- Unlike the newer aux, old Aux has Alt/Control/Shift+click handling
+				-- but does *not* do right-click. It also hooks ContainerFrameItemButton_OnClick()
+				-- instead of UseContainerItem() so it really is totally different.
+				-- Must come before Blizzard Auction House because the old
+				-- version doesn't have its own frame and uses the Blizz one.
+				_G.IsAddOnLoaded("aux-addon")
+				and _G.AuxVersion
+				and _G.Aux
+				and _G.Aux_ContainerFrameItemButton_OnClick
+				and self.ui:IsFrameVisible("AuctionFrame")
+			then
+				if
+					mouseButton == "RightButton"
+					and self.settings.rightClickAttach
+				then
+					-- Make right-clicking behave like all other auction house right-clicks (send to Sell tab).
+					local oldGlobalThis = _G.this
+					local oldIsAltKeyDown = _G.IsAltKeyDown
+					_G.this = itemButton.bagshuiData.getIdProxy or _G.this  -- Have to force the use of the item button proxy for GetID()/GetParent():GetID().
+					_G.IsAltKeyDown = BsUtil.ReturnTrue
+					_G.Aux_ContainerFrameItemButton_OnClick("LeftButton")
+					_G.IsAltKeyDown = oldIsAltKeyDown
+					_G.this = oldGlobalThis
+
+				else
+					-- Let things fall through the normal path so `Aux_ContainerFrameItemButton_OnClick()`
+					-- will handle Alt/Control/Shift+click.
+					clickHandled = false
+				end
 
 
 			elseif
@@ -896,6 +1173,15 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 			-- action might want to fall through to default behavior when it fails.
 			if not clickHandled then
 
+				-- We need to ensure use our metatable'd proxy frame (set up in
+				-- InventoryUi:CreateInventoryItemSlotButton()) is used so the
+				-- GetID() and GetParent():GetID() functions will be overridden.
+				-- The best way to guarantee this is to temporarily change the
+				-- meaning of global this while any code outside our control
+				-- is executed.
+				local oldGlobalThis = _G.this
+				_G.this = itemButton.bagshuiData.getIdProxy or _G.this
+
 				if mouseButton == "LeftButton" then
 					-- Normal left-click.
 					-- This will eventually become a call to ContainerFrameItemButton_OnClick(), which can handle:
@@ -905,7 +1191,7 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 					-- - Calling PickupContainerItem() if none of the above are met.
 					-- It also allows hooks to both ContainerFrameItemButton_OnClick() and PickupContainerItem() to work.
 					-- (See the declaration of Bagshui:PickupItem() for details about why it exists.)
-					Bagshui:PickupItem(item, self, this, callPickupContainerItemFromBagshuiPickupItem)
+					Bagshui:PickupItem(item, self, itemButton, callPickupContainerItemFromBagshuiPickupItem)
 
 				else
 					-- Normal right-click.
@@ -915,25 +1201,18 @@ function Inventory:ItemButton_OnClick(mouseButton, isDrag)
 					-- It also allows hooks to both ContainerFrameItemButton_OnClick() and UseContainerItem() to work.
 					_G.ContainerFrameItemButton_OnClick(mouseButton)
 				end
+				-- Restore global this.
+				_G.this = oldGlobalThis
 			end
 
+			-- Clear pending sale item (must happen before window update).
+			self:ClearItemPendingSale(nil, true)
 			-- Hide tooltip on click -- UpdateWindow() will call ItemSlotAndGroupMouseOverCheck(), which will show it again if needed.
 			self:ItemButton_OnLeave()
 			-- Something was clicked, so make sure the window is up to date.
 			self:ForceUpdateWindow()
 		end
 	end
-end
-
-
-
---- Set item slot button and parent frame ID to the given item's bagNum and slotNum, respectively.
---- This provides compatibility with Blizzard's ContainerFrameItemButton_OnClick(), etc.
----@param button table Item slot button.
----@param item table Bagshui item.
-function Inventory:UpdateItemButtonIDs(button, item)
-	button:SetID(item and item.slotNum or -99)
-	button:GetParent():SetID(item and item.bagNum or -99)
 end
 
 

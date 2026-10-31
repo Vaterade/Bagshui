@@ -68,6 +68,11 @@ function Bagshui:InitTooltips()
 		self.tooltips.hidden:CreateFontString("$parentTextLeft1", nil, "GameTooltipText"),
 		self.tooltips.hidden:CreateFontString("$parentTextRight1", nil, "GameTooltipText")
 	)
+	-- Avoid `SetTooltipMoney()` errors when very long tooltips are loaded.
+	-- There are probably other ways around this, but we don't (currently) need money info
+	-- in the hidden tooltip.
+	-- https://github.com/veechs/Bagshui/issues/102
+	self.tooltips.hidden:SetScript("OnTooltipAddMoney", nil)
 
 
 	-- Expose tooltips.
@@ -90,7 +95,7 @@ function Bagshui:CreateTooltip(name, inherits, smallFont)
 	local tooltip = _G.CreateFrame(
 		"GameTooltip",
 		tooltipName,
-		nil,
+		_G.UIParent,  -- Required for tooltips to respect UI scale.
 		inherits or "GameTooltipTemplate"
 	)
 	tooltip.bagshuiData = {
@@ -152,7 +157,7 @@ function Bagshui:FormatTooltipLine(text, label, title, indent)
 		)
 	end
 	if indent then
-		tooltipText = "  " .. tooltipText
+		tooltipText = BS_INDENT .. tooltipText
 	end
 	return tooltipText
 end
@@ -169,7 +174,7 @@ end
 --- ```
 ---@param tooltip table Tooltip frame to show.
 ---@param expectedOwner table Frame that should own the tooltip.
----@param tooltipGroupElement table UI element that conceptually groups multiple items together and will be used to determine when the delay to display tooltips should be shortened.
+---@param tooltipGroupElement table? UI element that conceptually groups multiple items together and will be used to determine when the delay to display tooltips should be shortened.
 ---@param delayOverride number? Delay after which the tooltip should be shown. `BS_TOOLTIP_DELAY_SECONDS.DEFAULT` will be used if not provided.
 ---@param noTooltipDelayShorting boolean? When true, do not shorten subsequent tooltip display delays.
 ---@param postDisplayCallback function? Callback to trigger after the tooltip is shown.
@@ -289,9 +294,19 @@ end
 ---@param attachToTooltip table? "Parent" tooltip to which the info tooltip will attach (default: `GameTooltip`).
 ---@param infoTooltip table? Info tooltip, if `BsInfoTooltip` shouldn't be used.
 function Bagshui:SetInfoTooltipPosition(owner, managedElsewhere, forceBelow, attachToTooltip, infoTooltip)
-	assert(owner, "Bagshui:SetInfoTooltipPosition() - owner is required")
+	-- Always need an owner. Don't throw an error though. Upstream code in
+	-- Bagshui:ManageInfoTooltip() tries to guard against this, but let's be sure.
+	if not owner then
+		return
+	end
 
 	attachToTooltip = attachToTooltip or _G.GameTooltip
+
+	-- Sanity check.
+	if not attachToTooltip.bagshuiData then
+		return
+	end
+
 	infoTooltip = infoTooltip or BsInfoTooltip
 
 	infoTooltip:SetOwner(owner, "ANCHOR_PRESERVE")
@@ -311,7 +326,18 @@ function Bagshui:SetInfoTooltipPosition(owner, managedElsewhere, forceBelow, att
 	attachToTooltip.bagshuiData.infoTooltipManagedElsewhere = managedElsewhere
 
 	-- Show info tooltip above or below depending on tooltip position.
-	if not forceBelow and _G.GetScreenHeight() - attachToTooltip:GetTop() > attachToTooltip:GetBottom() then
+	if
+		not forceBelow
+		and (
+			(
+				attachToTooltip:GetTop()
+				and _G.GetScreenHeight() - attachToTooltip:GetTop() > attachToTooltip:GetBottom()
+			)
+			or (
+				attachToTooltip.bagshuiData.displayNextAbove
+			)
+		)
+	then
 		-- Above.
 		infoTooltip:SetPoint("BOTTOM" .. leftRight, attachToTooltip, "TOP" .. leftRight, 0, -BsSkin.infoTooltipYOffset)
 	else
@@ -481,9 +507,11 @@ function Bagshui:ManageInfoTooltip(tooltip)
 
 		-- Should we actually show or hide?
 		if
-			(
+			tooltip.bagshuiData.lastOwner
+			and (
 				_G.IsAltKeyDown()
 				or tooltip.bagshuiData.showInfoTooltipWithoutAlt
+				or BsSettings.showInfoTooltipsWithoutAlt
 	 		)
 			and not _G.IsShiftKeyDown()
 		then
@@ -508,7 +536,10 @@ function Bagshui:ManageInfoTooltip(tooltip)
 				self:ShowInfoTooltip(tooltip.bagshuiData.infoTooltip)
 			end
 
-		elseif tooltip.bagshuiData.infoTooltip:IsOwned(tooltip.bagshuiData.lastOwner) then
+		elseif
+			not tooltip.bagshuiData.lastOwner
+			or tooltip.bagshuiData.infoTooltip:IsOwned(tooltip.bagshuiData.lastOwner)
+		then
 			-- Need to hide.
 			tooltip.bagshuiData.infoTooltip:Hide()
 
@@ -533,7 +564,13 @@ end
 
 
 
-
+--- Shared function for profession-related tooltips.
+---@param self table Tooltip.
+---@param type "Craft"|"TradeSkill" Profession type - used to decide what downstream functions to call.
+---@param skill string Profession name (passed through from the `:Set*()` function).
+---@param slot number? Item slot (passed through from the `:Set*()` function).
+---@param subtype string? If the hooked function ends in something other than "Item", specify that here.
+---@return unknown
 local function hookTooltip_SetProfessionItem(self, type, skill, slot, subtype)
 	if slot then
 		self.bagshuiData.lastItemString = BsItemInfo:ParseItemLink(_G["Get" .. type .. "ReagentItemLink"](skill, slot))
@@ -557,6 +594,7 @@ local hookTooltipFunctions = {
 	end,
 
 	SetAuctionItem = function(self, type, index)
+		self.bagshuiData.displayNextAbove = true  -- Don't obscure auction listing row.
 		self.bagshuiData.lastItemString = BsItemInfo:ParseItemLink(_G.GetAuctionItemLink(type, index))
 		return self.bagshuiData.hooked.SetAuctionItem(self, type, index)
 	end,
@@ -575,9 +613,22 @@ local hookTooltipFunctions = {
 		return hookTooltip_SetProfessionItem(self, "Craft", slot, nil, "Spell")
 	end,
 
-	SetHyperlink = function(self, itemString)
-		self.bagshuiData.lastItemString = BsItemInfo:ParseItemLink(itemString)
-		return self.bagshuiData.hooked.SetHyperlink(self, itemString)
+	SetHyperlink = function(self, link)
+		self.bagshuiData.lastItemString = BsItemInfo:ParseItemLink(link)
+		-- https://github.com/veechs/Bagshui/issues/52
+		-- Need to trap errors here because pfQuest adds "quest:" links to the game.
+		-- This in and of itself isn't a problem, but if the person clicking the
+		-- chat link isn't running pfQuest but IS using Bagshui, there will be an
+		-- error thrown that looks like it's a Bagshui issue. In reality, it's
+		-- simply that Vanilla WoW doesn't know what to do with quest links unless
+		-- an addon steps in and adds hooks to intercept them.
+		local ret, error = pcall(self.bagshuiData.hooked.SetHyperlink, self, link)
+		if error then
+			-- Display the error without the [Bagshui] prefix so it looks like a
+			-- standard game message (which it technically is).
+			Bagshui:ShowErrorMessage(error, nil, nil, nil, nil, nil, nil, nil, true)
+		end
+		return ret
 	end,
 
 	SetInboxItem = function(self, id, attachIndex)
@@ -646,11 +697,28 @@ local hookTooltipFunctions = {
 		self.bagshuiData.lastControlKeyState = -1
 		self.bagshuiData.lastShiftKeyState = -1
 		self.bagshuiData.showInfoTooltipWithoutAlt = nil
+		self.bagshuiData.displayNextAbove = nil
 		self.bagshuiData.originalPoint = nil
 		self.bagshuiData.originalAnchorToFrame = nil
 		self.bagshuiData.originalAnchorToPoint = nil
 		self.bagshuiData.originalXOffset = nil
 		self.bagshuiData.originalYOffset = nil
+
+		-- aux is almost impenetrable and does absolutely wild things with tooltips
+		-- where it caches the text instead of calling SetHyperlink(), but we *can*
+		-- luckily discover the item during the SetOwner() call. Refer to `methods.OnIconEnter`
+		-- in aux's gui\auction_listing.lua file to see why this works.
+		if _G.IsAddOnLoaded("aux-addon") then
+			local parent = owner:GetParent()
+			self.bagshuiData.lastItemString = BsItemInfo:ParseItemLink((
+				parent
+				and parent.row
+				and parent.row.record
+				and parent.row.record.link
+			))
+			self.bagshuiData.displayNextAbove = (self.bagshuiData.lastItemString ~= nil)  -- Don't obscure auction listing row.
+		end
+		
 		-- Clearing this only when the tooltip isn't visible keeps us from
 		-- incorrectly overriding the value set by our ItemButton code.
 		if not self:IsVisible() then
@@ -665,27 +733,19 @@ local hookTooltipFunctions = {
 local hookTooltipScripts = {
 
 	OnUpdate = function()
-		if _G.this.bagshuiData.hooked.OnUpdate then
-			_G.this.bagshuiData.hooked.OnUpdate()
-		end
-		Bagshui:ManageInfoTooltip(_G.this)
+		Bagshui:ManageInfoTooltip(_G.this.bagshuiData.tooltip)
 	end,
 
 	OnShow = function()
-		Bagshui:ManageInfoTooltip(_G.this)
-		if _G.this.bagshuiData.hooked.OnShow then
-			_G.this.bagshuiData.hooked.OnShow()
-		end
+		-- Next-frame delay is necessary to prevent flickering tooltips with pfQuest's `/db scan`.
+		Bagshui:QueueClassCallback(Bagshui, Bagshui.ManageInfoTooltip, nil, nil, _G.this.bagshuiData.tooltip)
 	end,
 
-	OnHide= function()
+	OnHide = function()
 		-- Do a check on the next frame to see if the info tooltip should be hidden.
 		-- Delay is necessary due to Blizzard's bag slot buttons constantly hiding and
 		-- re-showing GameTooltip OnUpdate.
-		Bagshui:QueueClassCallback(Bagshui, Bagshui.ManageInfoTooltip, nil, nil, _G.this)
-		if _G.this.bagshuiData.hooked.OnHide then
-			_G.this.bagshuiData.hooked.OnHide()
-		end
+		Bagshui:QueueClassCallback(Bagshui, Bagshui.ManageInfoTooltip, nil, nil, _G.this.bagshuiData.tooltip)
 	end,
 }
 
@@ -693,19 +753,24 @@ local hookTooltipScripts = {
 --- Do the necessary work to insert all tooltip hooks.
 --- Not using the Hooks class for this because it doesn't currently support hooking
 --- functions outside the global namespace.
----@param tooltip any
----@param createTooltip any
----@param showAbove any
-function Bagshui:HookTooltip(tooltip, createTooltip, showAbove)
+---@param tooltip table Tooltip to hook.
+---@param createInfoTooltip boolean? Create a new info tooltip to work with this tooltip.
+---@param showAbove boolean? Place the info tooltip above the hooked tooltip by default.
+function Bagshui:HookTooltip(tooltip, createInfoTooltip, showAbove)
+	if not tooltip then
+		return
+	end
 
 	if not tooltip.bagshuiData then
 		tooltip.bagshuiData = {}
 	end
 
+	local tooltipName = (tooltip:GetName() or tostring(tooltip))
+
 	local infoTooltip = BsInfoTooltip
 
-	if createTooltip then
-		infoTooltip = self:CreateTooltip((tooltip:GetName() or tostring(tooltip)) .. "Info", nil, true)
+	if createInfoTooltip then
+		infoTooltip = self:CreateTooltip(tooltipName .. "Info", nil, true)
 	end
 
 	tooltip.bagshuiData.infoTooltip = infoTooltip
@@ -721,9 +786,14 @@ function Bagshui:HookTooltip(tooltip, createTooltip, showAbove)
 	end
 
 	-- Hook scripts.
+	-- Handled by creating a child frame instead of hooking the existing frame's scripts
+	-- because it seems to behave MUCH better this way.
+	tooltip.bagshuiData.hookFrame = _G.CreateFrame("Frame", tooltipName .. "BagshuiHookFrame", tooltip)
+	tooltip.bagshuiData.hookFrame.bagshuiData = {
+		tooltip = tooltip
+	}
 	for scriptName, hookScript in pairs(hookTooltipScripts) do
-		tooltip.bagshuiData.hooked[scriptName] = tooltip:GetScript(scriptName)
-		tooltip:SetScript(scriptName, hookScript)
+		tooltip.bagshuiData.hookFrame:SetScript(scriptName, hookScript)
 	end
 
 end

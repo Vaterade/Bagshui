@@ -701,6 +701,51 @@ function Inventory:InitMenus()
 	self._itemMenuMatchedCategoryList = {}
 	self._itemMenuAssignedCategoryList = { "Uncategorized" }
 
+	-- Generate menu items for equipping bags.
+	-- This needs to contain entries from all inventory classes that have equippable bags.
+	local bagSwapMenu = {}
+	for _, inventoryClassName in ipairs(BS_INVENTORY_TYPE_UI_ORDER) do
+		local inventoryClass = Bagshui.components[inventoryClassName]
+		if
+			inventoryClass
+			and	inventoryClass.containerIds
+			-- Need more than a primary container.
+			and table.getn(inventoryClass.containerIds) > 1
+		then
+			table.insert(
+				bagSwapMenu,
+				{
+					text = inventoryClass.inventoryTypeLocalized,
+					isTitle = true,
+					notCheckable = true,
+				}
+			)
+			for _, containerId in ipairs(inventoryClass.containerIds) do
+				if containerId ~= inventoryClass.primaryContainer.id then
+					table.insert(
+						bagSwapMenu,
+						{
+							text = containerId,
+							notCheckable = true,
+							-- arg1 will be the item.
+							arg2 = {
+								containerId = containerId,
+								inventoryClass = inventoryClass,
+							},
+							_bagshuiTextureR = 1,
+							_bagshuiTextureG = 1,
+							_bagshuiTextureB = 1,
+							func = function(item, bagInfo)
+								Bagshui:CloseMenus()
+								bagInfo.inventoryClass:SwapBag(item, bagInfo.containerId)
+							end,
+						}
+					)
+				end
+			end
+		end
+	end
+
 	self.menus:AddMenu(
 		"Item",
 		-- 1
@@ -848,19 +893,23 @@ function Inventory:InitMenus()
 				hasArrow = true,
 			},
 			-- Direct Assignment is a Categories auto-split menu that contains all
-			-- editable (custom) categories. Any categories the item is directly
+			-- editable (custom) NON-CLASS categories. Any categories the item is directly
 			-- assigned to will be checked. These updates are performed by the
 			-- OpenMenu callback function.
 			{
 				_bagshuiMenuItemId = "ItemDirectCategoryAssignment",
 				text = L.Menu_Item_AssignToCategory,
 				tooltipTitle = L.Menu_Item_AssignToCategory_TooltipTitle,
-				tooltipText = L.Menu_Item_AssignToCategory_TooltipText,
+				tooltipText = L.Menu_Item_AssignToCategory_TooltipText .. BS_NEWLINE .. LIGHTYELLOW_FONT_COLOR_CODE .. L.Menu_Item_AssignToCategory_Hint_CustomOnly .. FONT_COLOR_CODE_CLOSE,
 				value = {
 					autoSplitMenuType = BS_AUTO_SPLIT_MENU_TYPE.CATEGORIES,
 					func = function(itemAndGroupId, categoryId)
-						BsCategories:ToggleItemCategoryAssignment(categoryId, itemAndGroupId.item.id)
-						self:EditModeWindowUpdate(true)
+						if BsCategories.list[categoryId].classes then
+							self.menus:OpenMenu("DirectAssignmentClasses", itemAndGroupId, categoryId, "cursor")
+						else
+							BsCategories:ToggleItemCategoryAssignment(categoryId, itemAndGroupId.item.id)
+							self:EditModeWindowUpdate(true)
+						end
 					end,
 					nameFunc = function(categoryId)
 						-- Need to override nameFunc to turn off duplicate suffix since we're only showing custom categories.
@@ -879,6 +928,7 @@ function Inventory:InitMenus()
 					autoSplitMenuExtraItems = {
 						{
 							text = string.format(L.Symbol_Ellipsis, L.New),
+							tooltipText = L.Menu_Item_AssignToCategory_CreateNew_TooltipText .. BS_NEWLINE .. LIGHTYELLOW_FONT_COLOR_CODE .. L.Menu_Item_AssignToCategory_Hint_CustomOnly .. FONT_COLOR_CODE_CLOSE,
 							checked = false,
 							value = {
 								func = function(itemAndGroupId, _)
@@ -886,7 +936,7 @@ function Inventory:InitMenus()
 									table.insert(template.list, itemAndGroupId.item.id)
 									BsCategories:NewObject(
 										template,
-										-- onFirstSave function
+										-- onFirstSave callback.
 										function(categoryId)
 											if string.len(categoryId or "") > 0 and string.len(itemAndGroupId.groupId or "") > 0 then
 												self:AssignCategoryToGroup(categoryId, itemAndGroupId.groupId, true)
@@ -921,7 +971,7 @@ function Inventory:InitMenus()
 						self:CloseMenusAndClearFocuses()
 					end,
 				},
-				-- Reset item stock state. 
+				-- Reset item stock state.
 				{
 					_bagshuiMenuItemId = "ItemResetStockState",
 					text = L.Menu_Item_ResetStockState,
@@ -929,16 +979,27 @@ function Inventory:InitMenus()
 					disabled = true,
 					keepShownOnClick = false,
 					func = function(item)
-						item.bagshuiDate = 0
-						item.bagshuiStockState = BS_ITEM_STOCK_STATE.NO_CHANGE
-						self:ForceUpdateWindow()
+						self:ResetStockState()
 					end,
+				},
+				-- Bag menu for equipping.
+				{
+					_bagshuiMenuItemId = "ItemEquipBag",
+					text = L.Menu_Item_EquipBag,
+					tooltipText = L.Menu_Item_EquipBag_TooltipText,
+					hasArrow = true,
+					disabled = true,
+					value = {
+						value = "bags",
+					},
 				},
 			}
 		},
 
 		-- 3
-		nil,
+		{
+			bags = bagSwapMenu
+		},
 
 		--- Item OpenMenu callback.
 		---@param menu table Menu table.
@@ -992,6 +1053,7 @@ function Inventory:InitMenus()
 					-- Item: Disable the Move menu for empty slots since they can't be directly assigned to a category, only via a rule function.
 					menuItem.disabled = not isMeaningfulItemId
 					menuItem.arg1 = item
+					menuItem._bagshuiHide = not self.editMode
 
 				elseif menuItem._bagshuiMenuItemId == "ItemDirectCategoryAssignment" then
 					-- Item: Disable the Direct Assignment menu for empty slots since they can't be directly assigned to a category, only via a rule function.
@@ -1004,8 +1066,14 @@ function Inventory:InitMenus()
 					menuItem.value.idsToOmit = directAssignmentCategoryIds and BsCategories.filteredIdLists.builtin or nil
 				end
 
-				-- Item: Toggle Direct Category Assignment Only Mode (for when an item is picked up in Edit Mode and dropped on a group).
-				if menuItem._bagshuiMenuItemId ~= "ItemNameTitle" and menuItem._bagshuiMenuItemId ~= "ItemDirectCategoryAssignment" and not item._bagshuiCategoryConfigTrigger then
+				-- Item: Hide everything other than Direct Assignment
+				-- when an item is picked up in Edit Mode and dropped on a group.
+				if
+					menuItem._bagshuiHide == false  -- Don't force anything to be shown that is already hidden.
+					and menuItem._bagshuiMenuItemId ~= "ItemNameTitle"
+					and menuItem._bagshuiMenuItemId ~= "ItemDirectCategoryAssignment"
+					and not item._bagshuiCategoryConfigTrigger
+				then
 					menuItem._bagshuiHide = (directAssignmentCategoryIds ~= nil)
 				end
 
@@ -1018,10 +1086,41 @@ function Inventory:InitMenus()
 				-- Update Manage submenu.
 				for _, menuItem in pairs(itemMenu.levels[2].manage) do
 					menuItem.arg1 = item
+
 					if menuItem._bagshuiMenuItemId == "ItemRemoveFromWorn" then
 						menuItem.disabled = not BsCharacter.equippedHistory[item.itemString]
+
 					elseif menuItem._bagshuiMenuItemId == "ItemResetStockState" then
 						menuItem.disabled = item.bagshuiStockState == BS_ITEM_STOCK_STATE.NO_CHANGE
+
+					elseif menuItem._bagshuiMenuItemId == "ItemEquipBag" then
+						menuItem.disabled = not BsItemInfo:IsContainer(item)
+
+						-- Update the bag slot menu to reflect current bags.
+						if not menuItem.disabled then
+							for index, bagMenuItem in pairs(itemMenu.levels[3].bags) do
+								if not bagMenuItem.isTitle then
+									bagMenuItem.arg1 = item
+									local inventoryClass = bagMenuItem.arg2.inventoryClass
+									local containerInfo = inventoryClass.containers[bagMenuItem.arg2.containerId]
+									if containerInfo.numSlots > 0 then
+										bagMenuItem.text = containerInfo.name
+										bagMenuItem.icon = containerInfo.texture
+									else
+										bagMenuItem.text = string.format(L.Symbol_Parentheses, L.EmptyBagSlot)
+										bagMenuItem.icon = BsUtil.GetFullTexturePath(BS_INVENTORY_EMPTY_SLOT_TEXTURE[L.Bag])
+									end
+									bagMenuItem.tooltipTitle = containerInfo.name
+									bagMenuItem.tooltipText = inventoryClass:GetBagSlotSwappableText(bagMenuItem.arg2.containerId)
+									bagMenuItem.disabled = (
+										(not inventoryClass.online)
+										-- Disable if the slot isn't usable. This is primarily for the Bank to disable unpurchased slots.
+										or containerInfo.usable == false
+									)
+								end
+							end
+						end
+
 					end
 				end
 
@@ -1057,6 +1156,85 @@ function Inventory:InitMenus()
 			arg1 = "",
 			func = showItemInfo,
 		}
+	)
+
+
+	-- Direct Assignment Class Selection Menu.
+	-- Triggered when a Class Category is chosen from the Direct Assignment menu.
+
+	local function toggleClassCategoryDirectAssignment(arg1)
+		BsCategories:ToggleItemCategoryAssignment(arg1.categoryId, arg1.itemId, _G.this.value)
+	end
+
+	local classMenu = BsUtil.TableCopy(BsGameInfo.characterClassMenu)
+	-- Reusable table for passing values through to the callback function.
+	local classMenuArg1 = {}
+
+	for _, menuItem in ipairs(classMenu) do
+		menuItem.arg1 = classMenuArg1
+		menuItem.func = toggleClassCategoryDirectAssignment
+	end
+	table.insert(
+		classMenu, 1,
+		{
+			text = "Item placeholder",
+			isTitle = true,
+			notCheckable = true,
+		}
+	)
+	table.insert(
+		classMenu, 2,
+		{
+			text = LIGHTYELLOW_FONT_COLOR_CODE .. L.Menu_Item_AssignToClassCategory .. FONT_COLOR_CODE_CLOSE,
+			isTitle = true,
+			notCheckable = true,
+		}
+	)
+	table.insert(
+		classMenu, 3,
+		{
+			text = "Category placeholder",
+			isTitle = true,
+			notCheckable = true,
+		}
+	)
+
+	self.menus:AddMenu(
+		"DirectAssignmentClasses",
+		classMenu,
+		-- Nothing for level 2/3.
+		nil, nil,
+		-- OpenMenu callback.
+		function(menu, itemAndGroupId, categoryId)
+			classMenuArg1.itemId = itemAndGroupId.item.id
+			classMenuArg1.categoryId = categoryId
+
+			menu.levels[1][1].text = itemAndGroupId.item.name
+			menu.levels[1][1].icon = itemAndGroupId.item.texture
+			menu.levels[1][1]._bagshuiTextureR = 1
+			menu.levels[1][1]._bagshuiTextureG = 1
+			menu.levels[1][1]._bagshuiTextureB = 1
+			if BsSkin.itemSlotIconTexCoord then
+				menu.levels[1][1].tCoordLeft = BsSkin.itemSlotIconTexCoord[1]
+				menu.levels[1][1].tCoordRight = BsSkin.itemSlotIconTexCoord[2]
+				menu.levels[1][1].tCoordTop = BsSkin.itemSlotIconTexCoord[3]
+				menu.levels[1][1].tCoordBottom = BsSkin.itemSlotIconTexCoord[4]
+			end
+
+			menu.levels[1][3].text = BsCategories:GetName(categoryId, true) or tostring(categoryId)
+
+			for i = 4, table.getn(menu.levels[1]) do
+				local menuItem = menu.levels[1][i]
+				menuItem.checked = BsCategories:ItemInDirectAssignmentList(
+					nil,
+					categoryId,
+					itemAndGroupId.item.id,
+					nil,
+					nil,
+					menuItem.value
+				)
+			end
+		end
 	)
 
 end

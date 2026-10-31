@@ -81,22 +81,15 @@ function Categories:InitUi()
 		arg1.editor:SetClass(_G.this.value)
 	end
 
-	local classMenu = {}
+	local classMenu = BsUtil.TableCopy(BsGameInfo.characterClassMenu)
 	-- Reusable table for passing values through to the callback function.
 	local classMenuArg1 = {}
 
 	-- Generate the menu items and add the menu.
-	for _, class in ipairs(BsGameInfo.sortedCharacterClasses) do
-		table.insert(
-			classMenu,
-			{
-				text = L[BsGameInfo.characterClasses[class]],
-				value = class,
-				arg1 = classMenuArg1,
-				notCheckable = true,
-				func = classMenuFunc
-			}
-		)
+	for _, menuItem in ipairs(classMenu) do
+		menuItem.arg1 = classMenuArg1
+		menuItem.notCheckable = true
+		menuItem.func = classMenuFunc
 	end
 
 	self.menus:AddMenu(
@@ -214,7 +207,8 @@ function Categories:InitUi()
 	---@param sortedRuleFunctionTemplateNames string[] Ordered array of rule function template names.
 	---@param ruleFunctionTemplates table<string, table> List of `{ <function name> = { { template 1 }, { template N } }`.
 	---@param ruleFunctionTemplateExtraEntries table<string, table>? List of `{ <function name> = { { template 1 }, { template N } }` that will be added to the bottom of the template menu.
-	local function buildRuleFunctionMenu(ruleFunctionMenus, sortedRuleFunctionTemplateNames, ruleFunctionTemplates, ruleFunctionTemplateExtraEntries)
+	---@param ruleFunctionTemplateGenericDescriptions table<string, string> List of `{ <function name> = "Description"] }` Tooltip for the rule function's parent menu item.
+	local function buildRuleFunctionMenu(ruleFunctionMenus, sortedRuleFunctionTemplateNames, ruleFunctionTemplates, ruleFunctionTemplateExtraEntries, ruleFunctionTemplateGenericDescriptions)
 		BsUtil.TableClear(ruleFunctionMenus)
 		local ruleFunctionMenu
 
@@ -263,7 +257,7 @@ function Categories:InitUi()
 										editBox = nil,
 									},
 								},
-								-- This is a stupid hack to get the data we need across to insertRuleFunctionTemplate().
+								-- Stupid hack to get the data we need across to `insertRuleFunctionTemplate()`.
 								arg2 = {
 									extra = true,
 									code = template.code
@@ -329,7 +323,7 @@ function Categories:InitUi()
 						table.insert(ruleFunctionMenu, {
 							text = functionName .. "(...)",
 							tooltipTitle = functionName .. "(...)",
-							tooltipText = (L_nil["RuleFunction_" .. functionName .. "_GenericDescription"] or "") .. (templates.aliasTooltipAddendum or ""),
+							tooltipText = (ruleFunctionTemplateGenericDescriptions[functionName] or "") .. (templates.aliasTooltipAddendum or ""),
 							hasArrow = true,
 							notCheckable = true,
 							value = {
@@ -359,7 +353,8 @@ function Categories:InitUi()
 		ruleFunctionMenus,
 		BsRules.sortedRuleFunctionTemplateNames,
 		BsRules.ruleFunctionTemplates,
-		BsRules.ruleFunctionTemplatesExtra
+		BsRules.ruleFunctionTemplatesExtra,
+		BsRules.ruleFunctionTemplateGenericDescriptions
 	)
 
 	for i, ruleFunctionMenu in ipairs(ruleFunctionMenus) do
@@ -444,7 +439,7 @@ function Categories:InitUi()
 			-- Basic Object Editor settings.
 
 			editorWidth  = 550,
-			editorHeight = 550,
+			editorHeight = 565,
 
 			-- Order of fields in editor UI.
 			editorFields = {
@@ -621,10 +616,63 @@ function Categories:InitUi()
 			classSelector,  -- Widget.
 			classSelectorWidth,  -- Widget width.
 			editor.manager.editorDimensions.widgetHeight,
+			"TOPLEFT",
 			editor.labelWidgetPairs.sequence,  -- Anchor to frame.
 			"BOTTOMLEFT"   -- Anchor to point.
 		)
 		editor.labelWidgetPairs.class:Hide()
+
+
+		-- Add ID to bottom.
+
+		local idEditBox = ui:CreateEditBox(
+			"objectId",
+			editor.content,
+			nil,
+			"NumberFontNormalSmallGray",
+			false,  -- multiline.
+			true,  -- noBackgroundOrBorder.
+			true  -- selectAllOnFocus.
+		)
+		-- Ensure text is visible when highlighted.
+		local oldOnFocusGained = idEditBox:GetScript("OnEditFocusGained")
+		idEditBox:SetScript("OnEditFocusGained", function()
+			oldOnFocusGained()
+			_G.this:SetTextColor(1, 1, 1)
+		end)
+		-- Clear highlight on focus lost.
+		local oldOnFocusLost = idEditBox:GetScript("OnEditFocusLost")
+		idEditBox:SetScript("OnEditFocusLost", function()
+			oldOnFocusLost()
+			_G.this:HighlightText(0, 0)
+			_G.this:SetTextColor(0.35, 0.35, 0.35)
+		end)
+
+		editor.idDisplay = ui:CreateLabeledWidget(
+			editor.content,  -- Parent.
+			string.format(L.Symbol_Colon, L.ID),  -- Label text.
+			20,  -- Label width.
+			idEditBox, -- Widget.
+			self.editorDimensions.widgetWidth,  -- Widget width.
+			self.editorDimensions.widgetHeight,  -- Widget height.
+			"BOTTOMLEFT",  -- Anchor point.
+			editor.content,  -- Anchor to frame.
+			"BOTTOMLEFT",  -- Anchor to point.
+			nil,  -- X offset.
+			nil,  -- Y offset.
+			L.CategoryEditor_ID_TooltipTitle,
+			L.CategoryEditor_ID_TooltipText
+		)
+		editor.idDisplay.bagshuiData.labelFrame:SetWidth(editor.idDisplay.bagshuiData.label:GetStringWidth())
+		editor.idDisplay.bagshuiData.widget:ClearAllPoints()
+		editor.ui:SetPoint(editor.idDisplay.bagshuiData.widget, "LEFT", editor.idDisplay.bagshuiData.labelFrame, "RIGHT", 0, 0)
+		editor.idDisplay.bagshuiData.label:SetFontObject("GameFontDisableSmall")
+		local font = (editor.idDisplay.bagshuiData.label:GetFont())
+		editor.idDisplay.bagshuiData.label:SetTextColor(0.35, 0.35, 0.35)
+		editor.idDisplay.bagshuiData.label:SetFont(font, 10)
+		font = (editor.idDisplay.bagshuiData.widget:GetFont())
+		editor.idDisplay.bagshuiData.widget:SetTextColor(0.35, 0.35, 0.35)
+		editor.idDisplay.bagshuiData.widget:SetFont(font, 10)
 
 
 		-- Store the editor frame height so it can be adjusted up and down based on whether it's a class category
@@ -715,6 +763,12 @@ function Categories:InitUi()
 			end
 		end
 
+		-- Update ID.
+		self.ui:SetEditBoxTextReadOnly(
+			self.idDisplay.bagshuiData.widget,
+			type(self.objectId) == "string" and string.format('"%s"', self.objectId) or self.objectId
+		)
+
 		return newObjectId
 	end
 
@@ -766,8 +820,8 @@ function Categories:InitUi()
 			and not self.dirtyFields.rule
 		then
 			-- Revert to last saved validation state if the rule hasn't been edited.
-			ruleValid = not self.originalObject.ruleError
-			errorMessage = self.originalObject.ruleError
+			errorMessage = categories.errors[self.originalObject.categoryId]
+			ruleValid = not errorMessage
 		end
 
 		-- Only change the validation icon if validation state is known.
@@ -859,6 +913,16 @@ function Categories:InitUi()
 		end
 
 		return dirty
+	end
+
+
+	-- Override for `ObjectEditor:CloseMenusAndClearFocuses()` to deal with the ID display.
+	function categoryEditor:CloseMenusAndClearFocuses(menus, editBoxes, listSelections)
+		self._super.CloseMenusAndClearFocuses(self, menus, editBoxes, listSelections)
+
+		if editBoxes ~= false then
+			self.idDisplay.bagshuiData.widget:ClearFocus()
+		end
 	end
 
 end

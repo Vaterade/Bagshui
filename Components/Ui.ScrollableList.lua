@@ -31,8 +31,10 @@ local HEADER_SPACING = 6
 --- 	multiSelect,
 --- 	---@type boolean? When `selectable` and `multiSelect` are true, show a checkbox next to each entry.
 --- 	checkboxes,
---- 	---@type boolean? When `checkboxes` is true, headers will get checkboxes too unless this is false..
+--- 	---@type boolean? When `checkboxes` is true, headers will get checkboxes too unless this is false.
 --- 	headerCheckboxes,
+--- 	---@type boolean? List is fully read-only and cannot be changed. Gets stored in the list's `bagshuiData.readOnly` property.
+--- 	readOnly,
 --- 	---@type string? ASC/DESC
 --- 	initialSortOrder,
 --- 	---@type number?
@@ -356,6 +358,7 @@ function Ui:CreateScrollableList(params)
 	listFrame.bagshuiData.multiSelect = params.multiSelect
 	listFrame.bagshuiData.checkboxes = params.multiSelect and params.checkboxes
 	listFrame.bagshuiData.headerCheckboxes = params.headerCheckboxes
+	listFrame.bagshuiData.readOnly = params.readOnly
 	listFrame.bagshuiData.onSelectionChangedFunc = params.onSelectionChangedFunc
 	listFrame.bagshuiData.onDoubleClickFunc = params.onDoubleClickFunc
 	listFrame.bagshuiData.entryOnEnterFunc = params.entryOnEnterFunc
@@ -636,11 +639,12 @@ end
 ---@param entries table? Array of list entry values.
 ---@param refresh boolean? When `entries` is nil, don't clear the list and just refresh it.
 ---@param preserveSelection boolean? Don't de-select the currently selected list entry.
-function Ui:PopulateScrollableList(listFrame, entries, refresh, preserveSelection)
+---@param preserveSearch boolean? Don't clear search text.
+function Ui:PopulateScrollableList(listFrame, entries, refresh, preserveSelection, preserveSearch)
 	assert(listFrame.bagshuiData.scrollableListType, "Ui:PopulateScrollableList(): Given listFrame is not a scrollable list")
 
 	-- Clear search text.
-	if listFrame.bagshuiData.searchBox then
+	if listFrame.bagshuiData.searchBox and not preserveSearch then
 		listFrame.bagshuiData.searchBox:SetText("")
 	end
 
@@ -748,7 +752,7 @@ function Ui:PopulateScrollableList(listFrame, entries, refresh, preserveSelectio
 	end
 
 	-- Make frames visible in the UI.
-	self:ShowScrollableListEntries(listFrame)
+	self:ShowScrollableListEntries(listFrame, (listFrame.bagshuiData.searchBox and listFrame.bagshuiData.searchBox.bagshuiData.searchText))
 
 	-- Update selection and button states.
 	self:SetScrollableListSelection(listFrame, (preserveSelection and listFrame.bagshuiData.lastSelection or nil))
@@ -1538,7 +1542,7 @@ function Ui:SetScrollableListSelection(listFrame, entryToSelect, selectionState,
 				and forceSelect
 				and not forceDeselect
 			)
-			
+
 		then
 			listFrame.bagshuiData.selectedEntry = entryFrame.bagshuiData.scrollableListEntry
 			self:SetScrollableListEntrySelectionState(listFrame, entryFrame, true)
@@ -1994,7 +1998,11 @@ end
 ---@param listFrame table `listFrame` return value from `Ui:CreateScrollableList()`.
 ---@param itemList string|number One or more item IDs, links, or itemStrings. Multiple should be separated by whitespace, commas, semicolons, ore newlines.
 function Ui:ItemListAdd(listFrame, itemList)
-	if not itemList then
+	if
+		not itemList
+		or not listFrame.bagshuiData
+		or listFrame.bagshuiData.readOnly
+	then
 		return
 	end
 

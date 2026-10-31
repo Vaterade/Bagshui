@@ -128,11 +128,15 @@ function Bank:BagSlotButton_Init(bagSlotButton)
 			_G.StaticPopup_Show("CONFIRM_BUY_BANK_SLOT")
 		elseif not self.containers[this.bagshuiData.bagNum].purchased then
 			return
-		elseif not _G.CursorHasItem() then
+		elseif
+			not _G.IsAltKeyDown()
+			and not _G.CursorHasItem()
+		then
 			-- Hack to get a call to PickupBagFromSlot().
+			-- Without this, Bank bags can only be picked up by dragging.
 			-- Another possibility is using `_G.BankFrameItemButtonBag_OnShiftClick()`.
 			this:GetScript("OnDragStart")()
-		elseif not self:BagSwap_TryFromCursor(this.bagshuiData.bagNum) then
+		else
 			oldOnClick()
 		end
 	end)
@@ -150,12 +154,20 @@ end
 ---@param bagSlotButton table Bag slot button object.
 ---@param numSlotsPurchased number? How many bank slots have been purchased so far.
 ---@param allSlotsPurchased boolean? Whether all bank slots have been purchased.
----@return number numSlotsPurchased
 function Bank:UpdateBagSlotPurchaseStatus(bagSlotButton, numSlotsPurchased, allSlotsPurchased)
+	if not self.online then
+		return
+	end
 	if numSlotsPurchased == nil then
 		numSlotsPurchased, allSlotsPurchased = _G.GetNumBankSlots()
 	end
-	-- `<button>.bagshuiData.bagNum` is the sequential bag slot number as set in InitUi().
+	-- Apparently GetNumBankSlots() can return nil sometimes. If that happens,
+	-- don't try to update anything and stick with the previous purchase status.
+	-- https://github.com/veechs/Bagshui/issues/177
+	if numSlotsPurchased == nil then
+		return
+	end
+	-- `<button>.bagshuiData.bagSlotNum` is the sequential bag slot number as set in InventoryUi:CreateBagSlotButtons().
 	self.containers[bagSlotButton.bagshuiData.bagNum].purchased = (
 			allSlotsPurchased
 			or bagSlotButton.bagshuiData.bagSlotNum <= numSlotsPurchased
@@ -164,7 +176,9 @@ function Bank:UpdateBagSlotPurchaseStatus(bagSlotButton, numSlotsPurchased, allS
 			not allSlotsPurchased
 			and bagSlotButton.bagshuiData.bagSlotNum == numSlotsPurchased + 1
 		)
-	return numSlotsPurchased
+	-- `usable` is consumed by the "Equip Bag" item menu entry to determine when
+	-- a slot should be disabled.
+	self.containers[bagSlotButton.bagshuiData.bagNum].usable = self.containers[bagSlotButton.bagshuiData.bagNum].purchased
 end
 
 

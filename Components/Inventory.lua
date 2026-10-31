@@ -187,12 +187,21 @@ function Inventory:New(newPropsOrInventoryType)
 		--		bindingKey = "BINDINGKEY"
 		--    	---@type function Call this in lieu of GetContainerNumSlots() (will be passed a bagNum parameter).
 		-- 		numSlotsFunction = <function>,
-		--    	---@type function Called as the second parameter to <tooltip>:SetInventoryItem() and passed the item's slotNum.
-		--      --           This is necessary because some containers' contents can't be loaded into tooltips using SetBagItem().
-		--    	getInventorySlotFunction = <function>
 		-- }
 		-- ```
 		primaryContainer = {},
+
+		---@type function? Called as the second parameter to <tooltip>:SetInventoryItem() 
+		--- and passed the item's slotNum. This is necessary because some containers'
+		--- contents can't be loaded into tooltips using SetBagItem().
+		getInventorySlotFunction = nil,
+
+		---@type string? Name of game function to call so other addons' tooltip hooks work.
+		--- Will be passed the current item slot button.
+		--- This is a string instead of the actual function so we can always be sure to
+		--- call the last link in the hook chain. If the function pointer was captured
+		--- at startup in Config\Inventory.lua then there's the risk of missing hooks.
+		itemSlotTooltipFunction = nil,
 
 		-- Bag button handling (none of these are applied to primaryContainer).
 		---@type string Name of XML template for bag buttons.
@@ -215,11 +224,18 @@ function Inventory:New(newPropsOrInventoryType)
 
 		--#region Additional subclass override properties. --------------------------------
 
-		---@type BS_INVENTORY_TYPE to attach frame to.
+		---@type BS_INVENTORY_TYPE? to attach frame to.
 		dockTo = nil,
 
-		---@type boolean Should the Hearthstone button be available?
+		---@type BS_RULE_MATCH_TYPE[]? Inventory classes to use as temporary space when swapping bags.
+		bagSwappingSupplementalStorage = nil,
+
+		---@type boolean Should the special toolbar buttons be available?
+
+		clamButton = false,
 		hearthButton = false,
+		disenchantButton = false,
+		pickLockButton = false,
 
 		---@type string Default sound to play when window is opened.
 		openSound = "igMainMenuOpen",
@@ -241,13 +257,17 @@ function Inventory:New(newPropsOrInventoryType)
 			BAG_UPDATE_COOLDOWN = true,
 			ITEM_LOCKED = true,  -- Doesn't seem to actually ever fire but let's register for it anyway.
 			ITEM_LOCK_CHANGED = true,  -- Required for multiple reasons, including preventing items from staying gray if you attempt to place them in an incompatible container (ex. non-ammo in ammo bags).
+			MERCHANT_CLOSED = true,  -- Clear pending sale item when leaving the merchant.
 			BAGSHUI_INVENTORY_INIT_RETRY = true,
+			BAGSHUI_INVENTORY_EDIT_MODE_UPDATE = true,  -- Need to register for this so inventory classes that share the same Structure profile can stay in sync.
+			BAGSHUI_INVENTORY_SEARCH = true,
 			BAGSHUI_ACTIVE_QUEST_ITEM_UPDATE = true,
 			BAGSHUI_INITIAL_INVENTORY_UPDATE = true,
 			BAGSHUI_CATEGORY_UPDATE = true,
 			BAGSHUI_CHARACTER_LEARNED_RECIPE = true,
 			BAGSHUI_CHARACTER_UPDATE = true,
 			BAGSHUI_CHARACTERDATA_UPDATE = true,
+			BAGSHUI_GAME_UPDATE = true,
 			BAGSHUI_PROFESSION_ITEM_UPDATE = true,
 			BAGSHUI_PROFILE_UPDATE = true,
 			BAGSHUI_SETTING_UPDATE = true,
@@ -263,6 +283,7 @@ function Inventory:New(newPropsOrInventoryType)
 			BagSlotButton_OnClick = "BagSlotButton_OnHook",
 			BagSlotButton_OnDrag = "BagSlotButton_OnHook",
 			TradeFrame_OnShow = "TradeFrame_OnShow",
+			UIErrorsFrame_OnEvent = "UIErrorsFrame_OnEvent",  -- See Inventory.Actions.lua.
 		},
 
 		---@type table<string,string> See Inventory:GetHookSettingName() for details.
@@ -313,44 +334,59 @@ function Inventory:New(newPropsOrInventoryType)
 		shadowStockState = {},
 		shadowBagshuiDate = {},
 
-		-- Restack queue -- see Restack() for details.
-		restackQueue = {
-			sources = {},
-			targets = {},
-		},
+		-- Item move queue -- used for restacking and bag swapping.
+		queuedMoveSources = {},
+		queuedMoveTargets = {},
+		tempMoveTargets = {},
+
+		-- Available empty slots (excluding profession bags -- see `Inventory:SwapBag()` comments).
+		emptyGenericContainerSlots = {},
 
 		-- Tracking tables used in UpdateCache().
 		preUpdateItemCounts = {},
 		postUpdateItemCounts = {},
 		lastUpdateLockedContainers = {},
 
-		-- Category/group-related lookup tables -- See CategorizeAndSort() for descriptions of most of these.
-		categoryIdsGroupedBySequence = {},
-		activeGroups = {},
-		sortedCategorySequenceNumbers = {},
-		categoriesToGroups = {},
+		-- Category/group-related lookup tables -- See `UpdateLayoutLookupTables()` for descriptions of most of these.
+		-- This is stored in the `currentLayoutState` table because there is a parallel `proposedLayoutState`
+		-- table used for dry-run calculations (automatically created during `Init()`).
+		currentLayoutState = {
+			activeCategoryIds = {},
+			activeGroups = {},
+			categoriesToGroups = {},
+			categoryIdsGroupedBySequence = {},
+			categorySequenceNumbers = {},
+			groupItems = {},
+			groups = {},
+			sortedCategorySequenceNumbers = {},
+		},
 
 		-- Tracking tables and state variables for UpdateWindow() and friends.
 		-- Detailed descriptions typically can be found where each is first referenced.
-		groups = {},
-		groupItems = {},
-		groupItemCounts = {},
-		groupWidthsInItems = {},
-		groupsIdsToFrames = {},
 		actualGroupWidths = {},
 		emptySlotStacks = {},  -- Fake item entries used to create empty slot stacks in the UI
+		groupItemCounts = {},
+		groupsIdsToFrames = {},
+		groupWidthsInItems = {},
 		expandEmptySlotStacks = false,
 		lastExpandEmptySlotStacks = false,
+		hasSlotsWithStackingPrevented = false,  -- Whether any item in the cache has the `_bagshuiPreventEmptySlotStack` property set to `true` (managed by `UpdateCache()`).
 		highlightItemsInContainerId = nil,
 		highlightItemsInContainerLocked = false,
+		highlightItemsContainerSlot = nil,
 		showHidden = false,  -- Toggle display of hidden groups and items (like Hearthstone).
 		hasHiddenGroups = false,  -- Whether any objects are hidden and the toolbar icon should appear.
 		multiplePartialStacks = false,  -- Whether there are multiple partial stacks of the same item, meaning the restack toolbar icon should be enabled.
+		positioningTables = {},
+		enableResortIcon = false,  -- Managed by `Inventory:CategorizeAndSort()` and consumed by `Inventory:UpdateToolbar()`.
 		hideItems = {},
 		hasHiddenItems = false,
 		hasChanges = false,
-		positioningTables = {},
-		enableResortIcon = false,  -- Managed by `Inventory:CategorizeAndSort()` and consumed by `Inventory:UpdateToolbar()`.
+		highlightChangesEnabled = false,
+		hasOpenables = false,
+		nextOpenableItemBagNum = nil,
+		nextOpenableItemSlotNum = nil,
+		nextOpenableItemSlotButton = nil,
 
 		-- Used to track changes that occur when bags are moved between slots (see `Bagshui:PickupInventoryItem()` for details).
 		pendingContainerChanges = {},
@@ -373,6 +409,9 @@ function Inventory:New(newPropsOrInventoryType)
 
 		---@type boolean Alter frame close behavior -- see UiFrame_OnShow().
 		dockingFrameVisibleOnLastOpen = false,
+
+		---@type boolean Make the bag utilization summary visible at all times - managed by UpdateWindow().
+		alwaysShowUsageSummary = false,
 
 		---@type table|nil Hearthstone cache entry tracking.
 		hearthstoneItemRef = nil,
@@ -410,13 +449,14 @@ function Inventory:New(newPropsOrInventoryType)
 		-- `containers` stores the following information about equipped/available bags (subclasses may add more):
 		-- ```
 		-- <ContainerId> = {
-		-- 	name = <Name of bag>
-		-- 	numSlots = <Number of slots>
-		--  genericType = <Bag Subclass or "Bag"> -- (A bag's "genericType" is the the item class returned by GetItemInfo for profession bags or the localized version of "Bag" for any other bag and the primary container)
-		--  isProfessionBag = <true/false>
-		-- 	slotsFilled = <Number of slots filled>
-		-- 	texture = <Bag texture>
-		-- 	type = <Container type>
+		-- 	name = "<Name of bag>",
+		-- 	numSlots = <Number of slots>,
+		--  genericType = "<Bag Subclass or 'Bag'>",  -- (A bag's "genericType" is the the item class returned by GetItemInfo for profession bags or the localized version of "Bag" for any other bag and the primary container)
+		--  isProfessionBag = <true/false>,
+		-- 	slotsFilled = <Number of slots filled>,
+		-- 	texture = "<Bag texture>",
+		-- 	type = "<Container type>",
+		--  usable = <true/false>,  -- OPTIONAL value. Will disable the slot in the "Equip Bag" item menu if `false`.
 		-- }
 		-- ```
 		containers = nil,   -- `Bagshui.characters[<characterId>][self.inventoryTypeSavedVars].containers`
@@ -447,10 +487,15 @@ function Inventory:New(newPropsOrInventoryType)
 	classObj.inventoryTypeLocalized = L[classObj.inventoryType]
 
 	-- Build the list of containerIds belonging to this class along with the reverse inventory ID (slot) mapping.
-	for index, containerId in ipairs(classObj.containerIds) do
+	for index = 1, table.getn(classObj.containerIds) do
+		local containerId = classObj.containerIds[index]
 		classObj.myContainerIds[containerId] = index
-		classObj.inventoryIdsToContainerIds[_G.ContainerIDToInventoryID(containerId)] = containerId
+		-- Starting inventory ID mapping at index 2 because primary containers are never inventory slots into which bags can be equipped.
+		if index > 1 then
+			classObj.inventoryIdsToContainerIds[_G.ContainerIDToInventoryID(containerId)] = containerId
+		end
 	end
+
 
 	-- Store docked inventory relationship.
 	if classObj.dockTo and Bagshui.components[classObj.dockTo] then
@@ -475,14 +520,38 @@ function Inventory:New(newPropsOrInventoryType)
 		end
 	end
 
-	-- Register slash command handler with Settings as an additional verb.
-	BsSlash:AddOpenCloseHandler(classObj.inventoryType, classObj, {L.Settings}, function(tokens)
-		if BsUtil.MatchLocalizedOrNon(tokens[2], "settings") then
-			classObj:Open()
-			classObj.menus:OpenMenu("Settings")
-			return true
+	-- Register slash command handler with additional verbs.
+	BsSlash:AddOpenCloseHandler(
+		classObj.inventoryType,
+		classObj,
+		{
+			L.Settings,
+			L.ResetPosition,
+			L.Lock,
+			L.Unlock,
+		},
+		function(tokens)
+			if BsUtil.MatchLocalizedOrNon(tokens[2], "settings") then
+				classObj:Open()
+				classObj.menus:OpenMenu("Settings")
+				return true
+			end
+
+			if BsUtil.MatchLocalizedOrNon(tokens[2], "resetposition") then
+				classObj:Open()
+				classObj:RescueWindow(true)
+				return true
+			end
+
+			if
+				BsUtil.MatchLocalizedOrNon(tokens[2], "lock")
+				or BsUtil.MatchLocalizedOrNon(tokens[2], "unlock")
+			then
+				classObj.settings.windowLocked = BsUtil.MatchLocalizedOrNon(tokens[2], "lock")
+				return true
+			end
 		end
-	end)
+)
 
 	-- Expose as `Bagshui.<inventoryType>`.
 	Bagshui.components[classObj.inventoryType] = classObj
@@ -527,6 +596,13 @@ function Inventory:Init()
 		self:SetProfile(self.settings["profile" .. profileType], profileType, true)
 	end
 
+	-- Prepare dry-run lookup tables and set initial lookup table pointers.
+	self.proposedLayoutState = {}
+	for key, _ in pairs(self.currentLayoutState) do
+		self.proposedLayoutState[key] = {}
+		self[key] = self.currentLayoutState[key]
+	end
+
 	-- Initialize settings.
 	self.settings:SetDefaults(false, BS_SETTING_SCOPE.INVENTORY)
 	self.settings:InitCache()
@@ -563,10 +639,12 @@ end
 --- Calling this function means that an update is needed, but if other update-triggering
 --- events arrive within the delay period, go ahead and allow them to reset the delay.
 --- This allows us to minimize our updates while still staying responsive.
-function Inventory:QueueUpdate(delay)
+---@param delay number? Delay before update in seconds.
+---@param cascade boolean? Parameter for `Inventory:Update()`.
+function Inventory:QueueUpdate(delay, cascade)
 	-- Don't push the default delay too low on this or we'll end up performing updates too quickly
 	-- during things like moving bags between slots, and stock states will be lost.
-	Bagshui:QueueClassCallback(self, self.Update, delay or 0.07, false)
+	Bagshui:QueueClassCallback(self, self.Update, delay or 0.07, false, cascade)
 end
 
 
@@ -577,12 +655,6 @@ end
 ---@param arg2 any? Argument 2 from the event.
 function Inventory:OnEvent(event, arg1, arg2)
 	-- self:PrintDebug("OnEvent(): " ..  event .. " // " .. tostring(arg1) .. " // " .. tostring(arg2))
-
-	-- Only used for bag swapping and shouldn't trigger an inventory update.
-	if event == "UI_ERROR_MESSAGE" then
-		self:BagSwap_OnError(arg1)
-		return
-	end
 
 	-- Store the name of this event so it can be checked when updating the inventory
 	-- cache to see if the cache update should be delayed (see self.lastEvent check
@@ -623,6 +695,14 @@ function Inventory:OnEvent(event, arg1, arg2)
 	end
 
 
+	-- MERCHANT_CLOSED: Clear pending sale item.
+	-- We also clear this when the window is opened but this is here just to be safe.
+	if event == "MERCHANT_CLOSED" then
+		self:ClearItemPendingSale()
+		return
+	end
+
+
 	-- When a character learns a new recipe, we have to re-cache all item tooltips
 	-- so learned indicators will be correct.
 	if event == "BAGSHUI_CHARACTER_LEARNED_RECIPE" then
@@ -639,10 +719,12 @@ function Inventory:OnEvent(event, arg1, arg2)
 		event == "BAGSHUI_ACTIVE_QUEST_ITEM_UPDATE"
 		or event == "BAGSHUI_CHARACTER_UPDATE"
 		or event == "BAGSHUI_EQUIPPED_HISTORY_UPDATE"
+		or event == "BAGSHUI_GAME_UPDATE"
 		or event == "BAGSHUI_PROFESSION_ITEM_UPDATE"
 	then
 		self.cacheUpdateNeeded = true
 		self.windowUpdateNeeded = true
+		self.resortNeeded = true  -- Light up the resort icon if the window is open.
 		-- DO NOT force a resort here or things will move around when the inventory
 		-- window is open and one of the change events is raised.
 		self:QueueUpdate()
@@ -660,6 +742,25 @@ function Inventory:OnEvent(event, arg1, arg2)
 		or event == "BAGSHUI_CHARACTERDATA_UPDATE"
 	then
 		self:UpdateToolbar()
+		return
+	end
+
+
+	-- When a character learns a new recipe, we have to re-cache all item tooltips
+	-- so learned indicators will be correct.
+	if event == "BAGSHUI_INVENTORY_SEARCH" then
+		if self:Visible() and arg1 ~= self.inventoryType then
+			self.searchTextSetFromEvent = true
+			if string.len(arg2 or "") > 0 then
+				self.ui.buttons.toolbar.search:Hide()
+				self.ui.frames.searchBox:Show()
+				self.ui.frames.searchBox:SetText(arg2)
+			else
+				self:ClearSearch()
+				self.ui.buttons.toolbar.search:Show()
+				self.ui.frames.searchBox:Hide()
+			end
+		end
 		return
 	end
 
@@ -729,17 +830,34 @@ function Inventory:OnEvent(event, arg1, arg2)
 	end
 
 
+	-- Keep layouts of inventories that share the same Structure profile in sync.
+	if event == "BAGSHUI_INVENTORY_EDIT_MODE_UPDATE" then
+		-- arg1 = Raising class.
+		-- arg2 = forceResort.
+		if
+			arg1 ~= self
+			and arg1.settings.profileStructure == self.settings.profileStructure
+		then
+			self:EditModeWindowUpdate(arg2, false, true)
+		end
+		return
+	end
+
+
 	-- Fall back to another profile if the active one is deleted.
 	if event == "BAGSHUI_PROFILE_UPDATE" then
 		for _, profileType in pairs(BS_PROFILE_TYPE) do
 			-- Trigger a profile update when one of the active profiles has changed.
 			if self.settings["profile" .. profileType] == arg1 then
 				self:SetProfile(arg1, profileType)
+				if profileType == BS_PROFILE_TYPE.STRUCTURE then
+					self.forceResort = true  -- Required to avoid issues during UpdateWindow() since all groups may need to be reassessed.
+				end
 				self.windowUpdateNeeded = true
-				self:QueueUpdate(0.005)
-				return
+				self:QueueUpdate(0.05)
 			end
 		end
+		return
 	end
 
 
@@ -754,14 +872,16 @@ function Inventory:OnEvent(event, arg1, arg2)
 	end
 
 
-	-- Always update the inventory cache immediately after a container is put down.
+	-- Lock/unlock events need a cache update, but not when a container has
+	-- been picked up.
 	if
-		event == "BAGSHUI_ITEM_LOCK_CHANGED"
-		and Bagshui.pickedUpBagSlotNum
-		and self.inventoryIdsToContainerIds[Bagshui.pickedUpBagSlotNum]
+		event == "ITEM_LOCK_CHANGED"
+		and not Bagshui.pickedUpBagSlotNum
+		and not Bagshui.putDownBagSlotNum
 	then
 		self.forceCacheUpdate = true
 	end
+
 
 	-- Assume any other event that gets this far may require a cache update.
 	self.cacheUpdateNeeded = true

@@ -1,25 +1,19 @@
 # Changelog OctoWoW – Bagshui
 
-> Branch `octowow` = the state from Dinkleberrrg's "OctoWoW – HD Upgrade" install (WoW 1.12).
+> Branch `upgrade-1.5.15` = Bagshui 1.5.15, the last upstream release, plus the changes below.
 
-**Base:** absir/Bagshui `05d269b` (2024-12-31)
+**Base:** `acid9000/Bagshui` `3b5e33b` (2025-09-18). The original `veechs/Bagshui` repo couldn't be reached, so this is a re-upload of 1.5.15. It matches `talex00/Bagshui` apart from that fork's Russian translation.
+
+The 1.0.5 install this replaces is on the `octowow` branch, including our own bag swap code, which 1.5.15's built-in swap makes unnecessary.
 
 ## Changes
 
 ### Code
 
-- Bag slot buttons read `OnUpdate` elapsed time from `arg1`.
-- Bags that contain items can be swapped (`Components/Inventory.BagSwap.lua`). Trying to replace an equipped bag moves its items to free slots, equips the new bag, then moves the items in, keeping their slot numbers where possible. At the bank, the other side's free slots count too (bank slots for bags, bag slots for bank bags). Items stay outside when the new bag is smaller or is a profession bag that didn't replace the same type.
+- Bag slot buttons read `OnUpdate` elapsed time from `arg1`. Upstream still has this bug: the parameter is nil on 1.12.
 
 ### Additional files
 
-The addon folder contains these files from the original install:
-
 | File | Note |
 |---|---|
-| Components/Inventory.Actions.lua | probably from a different Bagshui version; **not** loaded by the .toc |
-| Locale/zhCN.lua | Chinese translation; **not** loaded by the .toc |
-| Images/Icons/Clam.blp, Disenchant.blp, Mask.blp, PickLock.blp | additional icons |
-| Fonts/Prototype.ttf | "Prototype" font, consistent across the UI (also in ShaguPlates and MSBT) |
-
-These files are only kept so that the fork matches the installed state exactly.
+| Fonts/Prototype.ttf | "Prototype" font from the OctoWoW HD Upgrade install; nothing in Bagshui references it |

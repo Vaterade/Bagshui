@@ -13,7 +13,8 @@ local function ItemButton_OnEnter(targetItemButton, fromEntryFrame, refreshToolt
 	local this = targetItemButton or _G.this
 	this.bagshuiData.mouseIsOver = true
 
-	-- The itemString or item MUST be set on the Bagshui info table of the button for the tooltip to appear.
+	-- The `itemString` or an `item` table populated by `ItemInfo:Get()` MUST be
+	-- set on the `bagshuiData` table of the button for the tooltip to appear.
 	local itemString = this.bagshuiData.itemString or this.bagshuiData.item and this.bagshuiData.item.itemString
 	if type(itemString) == "string" and string.find(itemString, "^item:") then
 
@@ -23,9 +24,10 @@ local function ItemButton_OnEnter(targetItemButton, fromEntryFrame, refreshToolt
 		else
 			_G.GameTooltip:SetOwner(this, this.bagshuiData.tooltipAnchor or "ANCHOR_TOPLEFT")
 		end
-		-- Pass along to Bagshui:HookTooltip().
+		-- Pass along to `Bagshui:HookTooltip()`.
 		_G.GameTooltip.bagshuiData.showInfoTooltipWithoutAlt = this.bagshuiData and this.bagshuiData.showBagshuiInfoWithoutAlt
 
+		-- There's a custom tooltip position.
 		if
 			not this.bagshuiData.tooltipAnchorDefault
 			and (
@@ -190,6 +192,46 @@ end
 
 
 
+--- Helper function to create a cooldown model for a button.
+--- Broken out so it can be used by Item and BagSlot buttons.
+---@param button table Parent frame.
+---@return table cooldown
+function Ui:CreateItemButtonCooldown(button, disableText)
+	local cooldown = _G.CreateFrame("Model", button:GetName() .. "Cooldown", button, "CooldownFrameTemplate")
+	cooldown:SetFrameLevel(cooldown:GetFrameLevel() + 1)  -- Move above NormalTexture.
+	-- Pretend we're a pfUI frame so we can get pfUI cooldown text without the 
+	-- "Foreign Frames" option (so long as the pfUI cooldown module is enabled).
+	if pfUI and pfUI.env.C.disabled and pfUI.env.C.disabled.cooldown ~= "1" then
+		cooldown.pfCooldownType = "ALL"
+	end
+	return cooldown
+end
+
+
+
+--- Display progress using the cooldown radar animation.
+--- Basically a dupe of `CooldownFrame_SetTimer()`.
+--- Needed for two reasons:
+--- 1. The Vanilla version of OmniCC doesn't support the `noCooldownCount` property
+---    and essentially provides no way to prevent number display. It works by hooking
+---    `CooldownFrame_SetTimer()`, so we need to avoid that call.
+--- 2. It's cleaner than calculating these numbers inline.
+---@param cooldown table Cooldown frame.
+---@param progressPercent number 0-100.
+function Ui:ShowProgressViaCooldown(cooldown, progressPercent)
+	if type(progressPercent) == "number" and progressPercent > 0 then
+		cooldown.start = _G.GetTime() - (1000 - ((100 - progressPercent) * 10))
+		cooldown.duration = 1000
+		cooldown.stopping = 0
+		cooldown:SetSequence(0)
+		cooldown:Show()
+	else
+		cooldown:Hide()
+	end
+end
+
+
+
 --- Apply all our visual customizations to an item slot (or bag slot) button.
 ---@param button table Button to skin.
 function Ui:SkinItemButton(button, buttonType)
@@ -341,14 +383,7 @@ function Ui:SkinItemButton(button, buttonType)
 	if buttonType == BS_UI_ITEM_BUTTON_TYPE.ITEM then
 
 		-- Cooldown.
-		buttonComponents.cooldown = _G.CreateFrame("Model", nil, button, "CooldownFrameTemplate")
-		buttonComponents.cooldown:SetFrameLevel(buttonComponents.cooldown:GetFrameLevel() + 1)  -- Move above NormalTexture.
-		-- Enable pfUI cooldown display. The pfUI check is needed because
-		-- Turtle Dragonflight will double the text when pfCooldownType is present.
-		-- (`pfUI` is added to the Bagshui environment in Bagshui.lua).
-		if pfUI then
-			buttonComponents.cooldown.pfCooldownType = "ALL"
-		end
+		buttonComponents.cooldown = self:CreateItemButtonCooldown(button)
 
 		-- All badges need to be 2 levels above the border so the cooldown can be below them.
 		local badgeFrameLevel = buttonComponents.border:GetFrameLevel() + 2
@@ -417,6 +452,7 @@ function Ui:AssignItemToItemButton(button, item, groupId)
 	buttonInfo.iconTextureColorG = BS_COLOR.ITEM_SLOT_STATE_NORMAL[2]
 	buttonInfo.iconTextureColorB = BS_COLOR.ITEM_SLOT_STATE_NORMAL[3]
 	buttonInfo.iconTextureAlpha = BS_COLOR.ITEM_SLOT_STATE_NORMAL[4]
+	buttonInfo.backgroundTextureAlpha = 1
 
 	-- Figure out border color.
 	-- It's typically the quality color, but can be forced to something else.
@@ -557,9 +593,8 @@ function Ui:AssignItemToItemButton(button, item, groupId)
 
 
 		-- Dim locked items and their badges.
-
-		_G.SetItemButtonDesaturated(button, item.locked, 0.5, 0.5, 0.5)
-		if item.locked then
+		_G.SetItemButtonDesaturated(button, (item.locked == 1 and 1 or nil), 0.5, 0.5, 0.5)
+		if item.locked == 1 then
 			buttonInfo.iconTextureColorR = BS_COLOR.ITEM_SLOT_STATE_LOCKED[1]
 			buttonInfo.iconTextureColorG = BS_COLOR.ITEM_SLOT_STATE_LOCKED[2]
 			buttonInfo.iconTextureColorB = BS_COLOR.ITEM_SLOT_STATE_LOCKED[3]
@@ -575,11 +610,26 @@ function Ui:AssignItemToItemButton(button, item, groupId)
 
 	if item.emptySlot == 1 then
 		-- Empty slot: Show appropriate texture on the background layer.
-		local emptySlotTexture = BS_INVENTORY_EMPTY_SLOT_TEXTURE[L.Bag]
-		if inventory then
-			emptySlotTexture = inventory:GetEmptySlotTexture(item)
+		if
+			inventory
+			and inventory.settings
+			and not inventory.settings.emptySlotBackgroundImage
+		then
+			buttonComponents.background:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			buttonComponents.background:SetVertexColor(
+				inventory.settings.emptySlotBackgroundColor[1],
+				inventory.settings.emptySlotBackgroundColor[2],
+				inventory.settings.emptySlotBackgroundColor[3]
+			)
+			buttonInfo.backgroundTextureAlpha = inventory.settings.emptySlotBackgroundColor[4]
+		else
+			local emptySlotTexture = BS_INVENTORY_EMPTY_SLOT_TEXTURE[L.Bag]
+			if inventory then
+				emptySlotTexture = inventory:GetEmptySlotTexture(item)
+			end
+			buttonComponents.background:SetTexture(BsUtil.GetFullTexturePath(emptySlotTexture))
+			buttonComponents.background:SetVertexColor(1, 1, 1, 1)
 		end
-		buttonComponents.background:SetTexture(BsUtil.GetFullTexturePath(emptySlotTexture))
 
 	else
 		-- Filled slot: Remove background.
@@ -597,8 +647,7 @@ function Ui:AssignItemToItemButton(button, item, groupId)
 		local cooldownDuration = 0
 		local isOnCooldown = nil
 		if item.itemString ~= nil then
-			-- Using our GetContainerItemCooldown() wrapper for reasons explained in that function.
-			cooldownStart, cooldownDuration, isOnCooldown = BsUtil.GetContainerItemCooldown(item.bagNum, item.slotNum)
+			cooldownStart, cooldownDuration, isOnCooldown = _G.GetContainerItemCooldown(item.bagNum, item.slotNum)
 		end
 
 		_G.CooldownFrame_SetTimer(buttonComponents.cooldown, cooldownStart, cooldownDuration, isOnCooldown)
@@ -639,7 +688,6 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 	local iconTextureColorB = buttonInfo.iconTextureColorB or BS_COLOR.ITEM_SLOT_STATE_NORMAL[3]
 	local iconTextureAlpha = buttonInfo.iconTextureAlpha or BS_COLOR.ITEM_SLOT_STATE_NORMAL[4]
 
-
 	-- Determine whether this slot needs to be highlighted because its container is highlighted.
 	local containerHighlight = (
 		inventory
@@ -650,15 +698,20 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 				inventory.highlightItemsInContainerId
 				and item.bagNum == inventory.highlightItemsInContainerId
 				and not button.bagshuiData.isEmptySlotStack
+				-- Specific slot highlighting.
+				and (
+					not inventory.highlightItemsContainerSlot
+					or item.slotNum == inventory.highlightItemsContainerSlot
+				)
 			)
 			-- Condition 2: Item IS an empty slot stack and represents the desired container.
 			or (
 				button.bagshuiData.isEmptySlotStack
 				and inventory.emptySlotStacks[inventory.containers[item.bagNum].genericType]._bagsRepresented[inventory.highlightItemsInContainerId]
+				and not inventory.highlightItemsContainerSlot
 			)
 		)
 	)
-
 
 
 	if inventory and inventory.editMode then
@@ -721,7 +774,15 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 			inventory
 			and inventory.highlightItemsInContainerId
 			and item
-			and item.bagNum ~= inventory.highlightItemsInContainerId
+			and (
+				item.bagNum ~= inventory.highlightItemsInContainerId
+				-- Specific slot highlighting.
+				or (
+					inventory.highlightItemsContainerSlot
+					and item.bagNum == inventory.highlightItemsInContainerId
+					and item.slotNum ~= inventory.highlightItemsContainerSlot
+				)
+			)
 		then
 			iconTextureAlpha = 0.3
 			opacityOverride = 0.2
@@ -776,7 +837,7 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 			buttonInfo.qualityColor.g,
 			buttonInfo.qualityColor.b,
 			(
-				((inventory or buttonInfo.colorBorders) and item and item.quality > -1 and not item.locked) and (opacityOverride or BsSkin.itemSlotBorderOpacity)
+				((inventory or buttonInfo.colorBorders) and item and item.quality > -1 and item.locked ~= 1) and (opacityOverride or BsSkin.itemSlotBorderOpacity)
 				or (buttonInfo.forceBorderDisplay and opacityOverride or buttonInfo.qualityColor.a)
 				or 0
 			)
@@ -789,7 +850,7 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 				buttonInfo.qualityColor.g,
 				buttonInfo.qualityColor.b,
 				(
-					((inventory or buttonInfo.colorBorders) and item and item.quality > 1 and not item.locked)
+					((inventory or buttonInfo.colorBorders) and item and item.quality > 1 and item.locked ~= 1)
 					and (opacityOverride or BsSkin.itemSlotInnerGlowOpacity)
 					or 0
 				)
@@ -798,7 +859,7 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 
 		-- This is safe to call even if count is 0 because it will be hidden by
 		-- SetItemButtonCount(), which means SetAlpha() won't do anything.
-		buttonComponents.count:SetAlpha(opacityOverride or 1)
+		buttonComponents.count:SetAlpha(opacityOverride or iconTextureAlpha or 1)
 
 		-- Additional badges.
 		if buttonComponents.qualityBadge then
@@ -872,7 +933,7 @@ function Ui:UpdateItemButtonColorsAndBadges(button, force)
 	end
 
 	-- Background opacity for search miss (only really matters for empty slots).
-	buttonComponents.background:SetAlpha((not containerHighlight) and opacityOverride or 1)
+	buttonComponents.background:SetAlpha((not containerHighlight) and opacityOverride or (buttonInfo.backgroundTextureAlpha or 1))
 
 end
 
@@ -962,7 +1023,7 @@ function Ui:UpdateItemButtonStockState(button)
 				-- 	stockBadgeColor[3]
 				-- )
 
-				button.bagshuiData.stockBadgeAlpha = (not item.locked) and stockBadgeAlpha or 0
+				button.bagshuiData.stockBadgeAlpha = item.locked ~= 1 and stockBadgeAlpha or 0
 
 			end
 

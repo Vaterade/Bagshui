@@ -19,7 +19,7 @@ local _G = _G or getfenv()
 local bagshuiEnvironment = {
 	-- Pull basic information into the environment.
 
-	BS_VERSION = "",  -- Intentionally empty; will be filled from Bagshui.toc by Bagshui:AddonLoaded()
+	BS_VERSION = "",  -- Intentionally empty; will be filled from Bagshui.toc by `Bagshui:AddonLoaded()`.
 
 	-- Increment to wipe SavedVariables.
 	BS_DATA_VERSION = 1,
@@ -58,7 +58,9 @@ local bagshuiEnvironment = {
 	BS_DEFAULT_SORT_ORDER_ID = "Default",
 
 	-- Default profiles used at first login and for fallback if the configured default profile is unavailable.
+	-- ```
 	-- { [BS_PROFILE_TYPE value] = "ProfileId" }
+	-- ```
 	---@type table<BS_PROFILE_TYPE, string>
 	BS_DEFAULT_PROFILE = {
 		Structure = "Bagshui",
@@ -123,6 +125,7 @@ local bagshuiEnvironment = {
 		CHARACTER_INFO = "info",
 		COLORS = "colors",
 		DATA_VERSION = "dataVersion",
+		OBJECT_VERSIONS = "objectVersions",
 		LOG = "log",
 	},
 
@@ -174,6 +177,7 @@ local bagshuiEnvironment = {
 	---@type table<string, string>
 	BS_SETTING_TYPE = {
 		BOOL = "Bool",
+		BOOLEAN = "Bool",
 		CHOICES = "Choices",
 		COLOR = "ColorRgba",
 		NUMBER = "Number",
@@ -292,6 +296,9 @@ local bagshuiEnvironment = {
 	---@type string
 	BS_MENU_SUBTITLE_INDENT = "    ",
 
+	-- When checking whether a window with a saved position might be offscreen,
+	-- how close to the edge does it need to be?
+	BS_WINDOW_OFFSCREEN_RESCUE_THRESHOLD = 15,
 
 	-- Empty item used to initialize inventory cache entries.
 	-- Values here can't be nil or Lua drops them.
@@ -305,16 +312,19 @@ local bagshuiEnvironment = {
 		bagType = "",
 		charges = 0,
 		count = 0,
-		equipLocationLocalized = "",
 		equipLocation = "",
-		emptySlot = 0,  -- Using 0/1 instead of true/false for easy sorting
+		equipLocationLocalized = "",
+		equipLocationSort = 0,
+		emptySlot = 0,  -- Using 0/1 instead of true/false for easy sorting.
 		id = 0,
-		itemLink = "",  -- Item link (|cffffffff|Hitem:12345:0:0:0|h[Name]|h|r)
-		itemString = "",  -- Item string (item:12345:0:0:0)
+		itemLink = "",  -- Item link (|cffffffff|Hitem:12345:0:0:0|h[Name]|h|r).
+		itemString = "",  -- Item string (item:12345:0:0:0).
 		locked = 0,
+		lockPickable = 0,
 		maxStackCount = 0,
 		minLevel = "",
 		name = "",
+		openable = 0,
 		quality = 1,
 		qualityLocalized = "",
 		readable = 0,
@@ -324,7 +334,7 @@ local bagshuiEnvironment = {
 		tooltip = "",
 		texture = "Interface\\Icons\\INV_Misc_QuestionMark",
 		type = "",
-		uncategorized = 0,  -- Using 0/1 instead of true/false for easy sorting
+		uncategorized = 0,  -- Using 0/1 instead of true/false for easy sorting.
 
 		bagshuiGroupId = "",
 		bagshuiCategoryId = "",
@@ -351,8 +361,7 @@ local bagshuiEnvironment = {
 		"bagType",
 		"charges",
 		"count",
-		"equipLocationLocalized",
-		"equipLocation",
+		"equipLocationSort",
 		"emptySlot",
 		"id",
 		"itemLink",
@@ -365,6 +374,23 @@ local bagshuiEnvironment = {
 		"tooltip",
 		"type",
 		"uncategorized",
+	},
+
+	-- ItemInfo:InitializeItem() will never reset these properties.
+	---@type table<string, boolean>
+	BS_ITEM_PROTECTED_PROPERTIES = {
+		bagNum = true,
+		bagType = true,
+		slotNum = true,
+	},
+
+	-- ItemInfo:InitializeItem() will not set these properties to default if nil.
+	-- Typically needed for properties that are used for empty slot identification.
+	---@type table<string, boolean>
+	BS_ITEM_NIL_PROPERTIES = {
+		itemLink = true,
+		itemString = true,
+		texture = true,  -- Without this, empty slots for offline inventories will become ? icons.
 	},
 
 	-- Rule functions that correspond to item properties.
@@ -434,11 +460,11 @@ local bagshuiEnvironment = {
 		end,
 
 		soulbound = function(item)
-			return tostring(Bagshui.components.Rules:Match("soulbound()", item))
+			return tostring(Bagshui.components.Rules:Match("Soulbound()", item))
 		end,
 
 		stacks = function(item)
-			return tostring(Bagshui.components.Rules:Match("stacks()", item))
+			return tostring(Bagshui.components.Rules:Match("Stacks()", item))
 		end,
 
 		tooltip = function(item, displayType)
@@ -480,6 +506,42 @@ local bagshuiEnvironment = {
 	---@type string[]
 	BS_ITEM_PROPERTIES_SORTED = nil,
 
+	-- Used to get numbers for slot names so they can be sorted.
+	---@type table<string, number>
+	BS_INVENTORY_EQUIP_LOCATION_SORT_ORDER = {
+		INVTYPE_HEAD = 1,
+		INVTYPE_NECK = 2,
+		INVTYPE_SHOULDER = 3,
+		INVTYPE_CLOAK = 4,  -- Back
+		INVTYPE_CHEST = 5,
+		INVTYPE_ROBE = 5,  -- Chest
+		INVTYPE_BODY = 6,  -- Shirt
+		INVTYPE_TABARD = 7,
+		INVTYPE_WRIST = 8,
+		INVTYPE_HAND = 9,
+		INVTYPE_WAIST = 10,
+		INVTYPE_LEGS = 11,
+		INVTYPE_FEET = 12,
+		INVTYPE_FINGER = 13,
+		INVTYPE_FINGER_OTHER = 14,
+		INVTYPE_TRINKET = 15,
+		INVTYPE_TRINKET_OTHER = 16,
+		INVTYPE_2HWEAPON = 17,  -- Main Hand
+		INVTYPE_WEAPON = 17,  -- Main Hand
+		INVTYPE_WEAPONMAINHAND = 17,  -- Main Hand
+		INVTYPE_HOLDABLE = 18,  -- Offhand
+		INVTYPE_SHIELD = 18,  -- Offhand
+		INVTYPE_WEAPON_OTHER = 18,  -- Offhand
+		INVTYPE_WEAPONOFFHAND = 18,  -- Offhand
+		INVTYPE_RANGED = 19,
+		INVTYPE_RELIC = 19,  -- Ranged
+		INVTYPE_WAND = 19,  -- Ranged
+		INVTYPE_GUN = 19,  -- Ranged
+		INVTYPE_CROSSBOW = 19,  -- Ranged
+		INVTYPE_THROWN = 19,  -- Ranged
+		INVTYPE_PROJECTILE = 20,  -- Ammo
+	},
+
 
 	-- In addition to the bagshuiStockState item property, stock state table values are used
 	-- to determine the following stock badge attributes, so they must be PascalCase:
@@ -495,6 +557,52 @@ local bagshuiEnvironment = {
 		UP = "Up",
 		DOWN = "Down",
 		NO_CHANGE = "",
+	},
+
+	
+	---@enum BS_INVENTORY_BAG_USAGE_DISPLAY
+	-- Control when bag usage is displayed.
+	-- Values must match Setting_BagUsageDisplay_* localization entries.
+	---@type table<string, string>
+	BS_INVENTORY_BAG_USAGE_DISPLAY = {
+		ALWAYS = "Always",
+		SMART = "Smart",
+		NEVER = "Never",
+	},
+
+	---@enum BS_INVENTORY_BAG_USAGE_FORMAT
+	-- Control how bag usage is displayed.
+	-- Values must match Setting_BagUsageFormat_* localization entries.
+	---@type table<string, string>
+	BS_INVENTORY_BAG_USAGE_FORMAT = {
+		EMPTY = "Empty",
+		EMPTY_TOTAL = "Empty_Total",
+		EMPTY_USED_TOTAL = "Empty_Used_Total",
+		USED = "Used",
+		USED_TOTAL = "Used_Total",
+		USED_EMPTY_TOTAL = "Used_Empty_Total",
+	},
+
+
+	---@enum BS_GAME_PLAYER_GROUP_TYPE
+	-- Used by GameInfo for the `playerGroupType` property.
+	---@type table<string, string>
+	BS_GAME_PLAYER_GROUP_TYPE = {
+		PARTY = "Party",
+		RAID = "Raid",
+		SOLO = "Solo",
+	},
+
+
+	---@enum BS_RULE_ENVIRONMENT_VARIABLES
+	-- Variables that are pre-populated into the Rule evaluation environment.
+	-- Rule functions can add their own as well.
+	---@type table<string, string>
+	BS_RULE_ENVIRONMENT_VARIABLES = {
+		Active = "~Active~",
+		Eligible = "~Eligible~",
+		Inactive = "~Inactive~",
+		Ineligible = "~Ineligible~",
 	},
 
 
@@ -551,6 +659,10 @@ local bagshuiEnvironment = {
 	},
 
 
+	-- Output indentation.
+	BS_INDENT = "  ",
+
+
 	---@enum BS_LOG_MESSAGE_TYPE
 	-- Log message severities.
 	-- ```
@@ -591,10 +703,10 @@ local bagshuiEnvironment = {
 	---@type string
 	BS_LOG_DATE_STRING = "%Y-%m-%d %H:%M:%S",
 
-	-- Ensure debug is never turned on in production by requiring another addon to set BAGSHUI_DEBUG to true prior to Bagshui loading.
-	-- (I'm doing this via a one-line addon named !BagshuiDebug whose only code is BAGSHUI_DEBUG = true).
+	-- Ensure debug is never turned on in production by requiring another addon to set BAGSHUI_DEBUG_ON to true prior to Bagshui loading.
+	-- The !BagshuiDebug addon (in the Debug folder) is an easy way to enable this.
 	---@type boolean
-	BS_DEBUG = _G.BAGSHUI_DEBUG or false,
+	BS_DEBUG = _G.BAGSHUI_DEBUG_ON or false,
 
 	-- Is SuperWoW loaded? Since it's a DLL injection, not an addon, IsAddOnLoaded() won't help here.
 	---@type boolean
@@ -623,7 +735,14 @@ local bagshuiEnvironment = {
 	type = _G.type,
 
 	-- Other addons.
-	pfUI = _G.IsAddOnLoaded("pfUI") and _G.pfUI or nil,
+	-- Intensive check for pfUI to ensure it's the real thing and not an addon that
+	-- provides pfUI API compatibility. (And false is used since nil will just
+	-- end up with an empty table entry and it will metatable its way up into _G).
+	pfUI = (
+		_G.IsAddOnLoaded("pfUI")
+		and _G.pfUI and _G.pfUI.uf 
+		and _G.pfUI.env and _G.pfUI.env.C
+	) and _G.pfUI or false,
 
 
 	-- Contain the _ dummy variable within the Bagshui environment.
@@ -699,6 +818,7 @@ local Bagshui = {
 		CloseAllWindows = "CloseAllWindows",
 		DeleteCursorItem = "ClearCursor",
 		MoneyFrame_UpdateMoney = "MoneyFrame_UpdateMoney",
+		OpenStackSplitFrame = "OpenStackSplitFrame",
 		PickupBagFromSlot = "PickupInventoryItem",
 		PickupInventoryItem = "PickupInventoryItem",
 		PutItemInBag = "PickupInventoryItem",
@@ -809,12 +929,15 @@ function Bagshui:Init()
 	}
 	self.eventFrame:SetScript("OnEvent", function()
 		-- Vanilla WoW "passes" event parameters via global variables.
-		self:OnEvent(_G.event, _G.arg1, _G.arg2)
+		self:OnEvent(_G.event, _G.arg1, _G.arg2, _G.arg3, _G.arg4)
 	end)
 	self.eventFrame:SetScript("OnUpdate", function()
 		-- Check the event queue on every frame.
 		self:ProcessEventQueue()
 	end)
+
+	-- Enable for event spelunking only.
+	-- self.eventFrame:RegisterAllEvents()
 
 
 	-- Bagshui itself needs these events. Other classes register their own events.
@@ -859,6 +982,8 @@ function Bagshui:Init()
 		end
 	end
 
+	-- Need to adjust this by the scale so it behaves as expected.
+	BS_WINDOW_OFFSCREEN_RESCUE_THRESHOLD = BS_WINDOW_OFFSCREEN_RESCUE_THRESHOLD / _G.UIParent:GetScale()
 end
 
 
@@ -905,6 +1030,12 @@ function Bagshui:AddonLoaded()
 		}
 	end
 
+	-- Creating the object versions key here because it was added after 1.0.
+	if not _G.BagshuiData[BS_CONFIG_KEY.OBJECT_VERSIONS] then
+		_G.BagshuiData[BS_CONFIG_KEY.OBJECT_VERSIONS] = {}
+	end
+	self.objectVersions = _G.BagshuiData[BS_CONFIG_KEY.OBJECT_VERSIONS]
+
 	-- Color history (account-wide).
 	if _G.BagshuiData[BS_CONFIG_KEY.COLORS] == nil then
 		_G.BagshuiData[BS_CONFIG_KEY.COLORS] = {}
@@ -928,11 +1059,27 @@ function Bagshui:AddonLoaded()
 	end
 	self.currentCharacterInfo = self.currentCharacterData[BS_CONFIG_KEY.CHARACTER_INFO]
 
+	-- Inventory validation.
+	-- This will ensure there are no errors when changes are made to the expected inventory cache structure.
+	for character, characterData in pairs(self.characters) do
+		for _, inventoryType in pairs(BS_INVENTORY_TYPE) do
+			inventoryType = string.lower(inventoryType)
+			if characterData[inventoryType] and characterData[inventoryType].inventory then
+				for containerNum, containerContents in pairs(characterData[inventoryType].inventory) do
+					for slotNum, item in ipairs(containerContents) do
+						BsItemInfo:InitializeItem(item, false, true)
+					end
+				end
+			end
+		end
+	end
+
 	-- Log storage.
 	if _G.BagshuiData[BS_CONFIG_KEY.LOG] == nil then
 		_G.BagshuiData[BS_CONFIG_KEY.LOG] = {}
 	end
 	self.log = _G.BagshuiData[BS_CONFIG_KEY.LOG]
+
 end
 
 
@@ -983,6 +1130,8 @@ end
 ---@param arg3 any? Third argument, if any.
 ---@param arg4 any? Fourth argument, if any.
 function Bagshui:OnEvent(event, arg1, arg2, arg3, arg4)
+	-- Bagshui:PrintDebug("Bagshui event " .. event .. " // " .. tostring(arg1) .. " // " .. tostring(arg2) .. " // " .. tostring(arg3) .. " // " .. tostring(arg4))
+
 	local downstreamEvent = event  --[[@as string|nil]]
 
 	if event == "ADDON_LOADED" then

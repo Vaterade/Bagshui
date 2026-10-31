@@ -343,12 +343,21 @@ function Settings:OnEvent(event, arg1, arg2, arg3, arg4)
 	-- arg1 is settingName.
 	-- arg2 is settingInfo.
 	-- arg3 is newValue.
-	-- arg4 is the Settings class instance.
+	-- arg4 is the Settings class instance that raised the event.
+
 	if
 		self._settingCache
 		and event == "BAGSHUI_SETTING_UPDATE"
 		and arg4 ~= self
-		and arg2.scope ~= BS_SETTING_SCOPE.INVENTORY
+		and (
+			arg2.scope ~= BS_SETTING_SCOPE.INVENTORY
+			or (
+				-- Keep profile-scoped settings in sync when the change was made to the profile we're using.
+				self._inventoryClassInstance
+				and arg2.profileScope
+				and self["profile" .. BS_PROFILE_TYPE[arg2.profileScope]] == arg4["profile" .. BS_PROFILE_TYPE[arg2.profileScope]]
+			)
+		)
 	then
 		self._settingCache[arg1] = arg3
 	end
@@ -515,7 +524,8 @@ end
 ---@param scope BS_SETTING_SCOPE? Only reset settings matching this scope.
 ---@param omitScope BS_SETTING_SCOPE? Only reset settings NOT matching this scope.
 ---@param limitToSetting string? Reset only the specified setting (scope-based filtering still applies).
-function Settings:SetDefaults(forceReset, scope, omitScope, limitToSetting)
+---@param silent boolean? Don't print a message when settings are changed.
+function Settings:SetDefaults(forceReset, scope, omitScope, limitToSetting, silent)
 	--Bagshui:PrintDebug(string.format("SetDefaults() forceReset=%s scope=%s omitScope=%s", tostring(forceReset), tostring(scope), tostring(omitScope)))
 
 	local qualifiedSettingName, currentVersion, newVersion, currentValue, newValue, changeReason
@@ -599,7 +609,7 @@ function Settings:SetDefaults(forceReset, scope, omitScope, limitToSetting)
 						self:Set(settingName, newValue, true, true)
 
 						-- Logging.
-						if currentValue ~= nil then
+						if not silent and currentValue ~= nil then
 							qualifiedSettingName = tostring((settingInfo.scope ~= BS_SETTING_SCOPE.INVENTORY) and settingInfo.scope or self._inventoryType) .. "." .. settingName
 							-- "<Setting> reset [<reason>] '<old value>' => '<new value>'"
 							Bagshui:PrintInfo(string.format(
@@ -689,7 +699,7 @@ end
 
 
 
---- Validation: BS_SETTING_TYPE.BOOL  
+--- Validation: BS_SETTING_TYPE.BOOL
 --- Understands 1 -> true, "true" -> true.
 ---@param value any Setting value to validate.
 ---@param settingInfo any Configuration for the setting being validated.

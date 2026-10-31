@@ -31,10 +31,11 @@ end
 
 
 --- Trigger window update only if Edit Mode is enabled.
----@param forceResort boolean?
----@param itemSlotColorsOnly boolean?
-function Inventory:EditModeWindowUpdate(forceResort, itemSlotColorsOnly)
-	if not self.editMode then
+---@param forceResort boolean? Trigger a full re-sort.
+---@param itemSlotColorsOnly boolean? High performance update mode.
+---@param calledFromEvent boolean? This is coming from a BAGSHUI_PROFILE_UPDATE event raised by another inventory class.
+function Inventory:EditModeWindowUpdate(forceResort, itemSlotColorsOnly, calledFromEvent)
+	if not (self.editMode or calledFromEvent) then
 		return
 	end
 
@@ -43,12 +44,15 @@ function Inventory:EditModeWindowUpdate(forceResort, itemSlotColorsOnly)
 		-- Using normal Update() is way too slow to keep pace with mouse movements.
 		self:UpdateItemSlotColors()
 	else
+		-- Normal Edit Mode update.
 		self.cacheUpdateNeeded = false
 		self.windowUpdateNeeded = true
 		self.forceResort = (forceResort == true)
-		self.lastCategorizeItems = 0  -- Force clearing errors in `Inventory:CategorizeItems()`.
 		self:Update()
-		Bagshui:RaiseEvent("BAGSHUI_INVENTORY_EDIT_MODE_UPDATE")
+		-- Don't cause a stack overflow with recursive events.
+		if not calledFromEvent then
+			Bagshui:RaiseEvent("BAGSHUI_INVENTORY_EDIT_MODE_UPDATE", nil, self, forceResort)
+		end
 	end
 end
 
@@ -483,10 +487,10 @@ function Inventory:RenameGroup(groupId, groupIsNew)
 			text = "",
 			button1 = _G.OKAY,
 			button2 = _G.CANCEL,
-			hasEditBox = 1,
+			hasEditBox = true,
 			timeout = 0,
-			whileDead = 1,
-			hideOnEscape = 1,
+			whileDead = true,
+			hideOnEscape = true,
 			EditBoxOnEnterPressed = BsUtil.StaticPopupDialogs_EnterClicksFirstButton,
 			-- Extra property to be used in OnShow to fill the edit box.
 			-- Blizzard doesn't provide an easy way to do this in Vanilla as the
@@ -532,8 +536,6 @@ function Inventory:RenameGroup(groupId, groupIsNew)
 			-- Clear text on hide so it doesn't bleed over to other dialogs.
 			OnHide = BsUtil.StaticPopupDialogs_ClearTextOnHide
 		}
-
-		self.renameGroup_Data = {}
 	end
 
 	-- Current group name and text to prompt user with.
@@ -550,6 +552,11 @@ function Inventory:RenameGroup(groupId, groupIsNew)
 	-- Lock group highlight so it's more clear what group is being renamed.
 	self.editModeGroupHighlight = groupId
 	self:EditModeWindowUpdate()
+
+	-- This seems to get removed sometimes so we'll make sure it stays.
+	if not self.renameGroup_Data then
+		self.renameGroup_Data = {}
+	end
 
 	-- Set properties we need the dialog scripts to know.
 	self.renameGroup_Data.groupId = groupId
@@ -589,10 +596,10 @@ function Inventory:DeleteGroup(groupId)
 			text = L.EditMode_Prompt_DeleteGroup,
 			button1 = L.Delete,
 			button2 = L.Cancel,
-			showAlert = 1,
+			showAlert = true,
 			timeout = 0,
-			whileDead = 1,
-			hideOnEscape = 1,
+			whileDead = true,
+			hideOnEscape = true,
 
 			-- Delete the group.
 			-- The groupId parameter comes from the dialog's data property which is set below.

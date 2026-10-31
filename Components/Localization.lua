@@ -30,6 +30,10 @@ local Localization = {
 
 	-- List of available locales in the form of `{ <locale> = { <localization table> } }`.
 	locales = {},
+
+	-- Used by `Localization:AutoLocalize()` to keep track of what has already been automatically localized
+	-- so we don't double-localize (see that function for further explanation).
+	autoLocalized = {},
 }
 Bagshui.environment.BsLocalization = Localization
 Bagshui.components.Localization = Localization
@@ -97,10 +101,14 @@ function Localization:Init()
 
 	-- Choose the correct locale -- try the current locale first, then fall back to the default if needed.
 	local locale = _G.GetLocale()
+
 	if locale and self.locales[locale] then
 		Localization.activeLocaleId = locale
 	else
-		Bagshui:PrintWarning("No localization available for " .. locale .. "; falling back to " .. BS_DEFAULT_LOCALE)
+		Bagshui:PrintWarning(
+			"No localization available for " .. locale .. "; falling back to " .. BS_DEFAULT_LOCALE .. ". "
+			.. "Many items will not be properly categorized!"
+		)
 		Localization.activeLocaleId = BS_DEFAULT_LOCALE
 	end
 	self.activeLocale = self.locales[Localization.activeLocaleId]
@@ -136,36 +144,25 @@ function Localization:Init()
 	end
 
 
-	-- Build automatic localization as much as possible (it's not all that much in Vanilla).
+	-- Automatic localizations (as much as we can).
 
-	-- Item classes.
-	for enUS, localized in pairs(BsGameInfo.itemClasses) do
-		if localized and not self.activeLocale[enUS] then
-			self.activeLocale[enUS] = localized
-		end
-	end
+	-- Item slots need to be handled before item classes and subclasses, because Bag ITEMS
+	-- and bag SLOTS are different in some languages, and Bagshui expects L["Bag"] to refer to ITEMS.
+	-- (For example, in German, Bag ITEMS are Behälter, but bag SLOTS are Tasche.)
+	self:AutoLocalize(BsGameInfo.inventorySlots, locale)
 
-	-- Item subclasses.
+	self:AutoLocalize(BsGameInfo.itemClasses, locale)
 	for _, subClassList in pairs(BsGameInfo.itemSubclasses) do
-		for enUS, localized in pairs(subClassList) do
-			if localized and not self.activeLocale[enUS] then
-				self.activeLocale[enUS] = localized
-			end
-		end
+		self:AutoLocalize(subClassList, locale)
 	end
 
-	-- Inventory slots.
-	for enUS, localized in pairs(BsGameInfo.inventorySlots) do
-		if localized and not self.activeLocale[enUS] then
-			self.activeLocale[enUS] = localized
-		end
-	end
 
 	-- System chat messages.
 	-- Needed for CHAT_MSG_SYSTEM events in `Inventory:OnEvent()`.
 	self.activeLocale.ChatMsgIdentifier_LearnedRecipe =
 		self.activeLocale.ChatMsgIdentifier_LearnedRecipe
 		or string.format(_G.ERR_LEARN_RECIPE_S, ".+")
+
 
 	-- Add lowercase versions.
 	-- A temp table is required here because pairs() gets confused if the table
@@ -204,28 +201,56 @@ function Localization:AddLocale(locale, strings)
 		self.locales[locale] = strings
 	end
 
-
-	-- for localizationString, localized in pairs(strings) do
-	-- 	if type(localized) == "table" then
-	-- 		Bagshui:PrintWarning("Localization of '" .. localizationString .. "' is a table. Maybe a global string got overwritten?")
-	-- 	end
-	-- end
-
 	-- Replace any !!placeholders!! with their actual localized values.
 	for localizationString, localized in pairs(self.locales[locale]) do
-		self.locales[locale][localizationString] = string.gsub(
-			localized,
-			"(!!(.-)!!)",
-			function(match, placeholderToReplace)
-				if self.locales[locale][placeholderToReplace] then
-					return self.locales[locale][placeholderToReplace]
-				else
-					Bagshui:PrintWarning("Localization placeholder " .. tostring(match) .. " not found!")
-					return match
-				end
-			end
-		)
+		self.locales[locale][localizationString] = self:ReplacePlaceholders(localized, locale)
 	end
+end
+
+
+
+--- Build automatic localization from a provided table.
+---@param enUSToLocalized table<string,string> English to localized strings.
+---@param clientLocale string Current client locale.
+function Localization:AutoLocalize(enUSToLocalized, clientLocale)
+	for english, localized in pairs(enUSToLocalized) do
+		if
+			localized
+			and (
+				-- Avoid overriding human-provided translations.
+				not self.activeLocale[english]
+				-- Go ahead and override if the default locale (enUS) is only being used
+				-- because there isn't a Bagshui localization for the client locale.
+				or clientLocale ~= BS_DEFAULT_LOCALE
+			)
+		then
+			self.activeLocale[english] = localized
+		end
+	end
+end
+
+
+
+--- Replace any !!placeholders!! with their actual localized values.
+--- Recurses as needed.
+---@param str string String to search for !!placeholders!!.
+---@param locale string Locale in which placeholder keys can be found.
+---@return string
+function Localization:ReplacePlaceholders(str, locale)
+	return (string.gsub(
+		str,
+		"(!!(.-)!!)",
+		function(match, placeholderToReplace)
+			if self.locales[locale][placeholderToReplace] then
+				return Localization:ReplacePlaceholders(self.locales[locale][placeholderToReplace], locale)
+			else
+				Bagshui:PrintDebug("Localization placeholder " .. tostring(match) .. " not found! (from " .. tostring(str) .. ")")
+				-- Logging system isn't fully initialized yet, so this is being disabled for now.
+				--Bagshui:PrintWarning("Localization placeholder " .. tostring(match) .. " not found!")
+				return match
+			end
+		end
+	))
 end
 
 

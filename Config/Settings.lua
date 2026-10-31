@@ -34,6 +34,51 @@ local POSITION_CHOICES = {
 }
 
 
+-- Generate the menu for bag utilization display and format.
+local bagUsageDisplayChoices = {}
+local bagUsageFormats = {}
+
+-- Need an order because the enum doesn't have one.
+do
+	local bagUsageDisplayOrder = {
+		BS_INVENTORY_BAG_USAGE_DISPLAY.ALWAYS,
+		BS_INVENTORY_BAG_USAGE_DISPLAY.SMART,
+		BS_INVENTORY_BAG_USAGE_DISPLAY.NEVER,
+	}
+	-- This will be assigned to the `choices` for `bagUsageFormat`.
+	for _, bagUsageDisplay in ipairs(bagUsageDisplayOrder) do
+		table.insert(
+			bagUsageDisplayChoices,
+			{
+				value = bagUsageDisplay,
+				text = L["Setting_BagUsageDisplay_" .. bagUsageDisplay],
+				tooltipTitle = L["Setting_BagUsageDisplay_" .. bagUsageDisplay .. "_TooltipTitle"],
+				tooltipText = L["Setting_BagUsageDisplay_" .. bagUsageDisplay .. "_TooltipText"],
+			}
+		)
+	end
+
+	-- Need an order because the enum doesn't have one.
+	local bagUsageFormatOrder = {
+		BS_INVENTORY_BAG_USAGE_FORMAT.EMPTY,
+		BS_INVENTORY_BAG_USAGE_FORMAT.EMPTY_TOTAL,
+		BS_INVENTORY_BAG_USAGE_FORMAT.EMPTY_USED_TOTAL,
+		BS_INVENTORY_BAG_USAGE_FORMAT.USED,
+		BS_INVENTORY_BAG_USAGE_FORMAT.USED_TOTAL,
+		BS_INVENTORY_BAG_USAGE_FORMAT.USED_EMPTY_TOTAL,
+	}
+	-- This will be assigned to the `choices` for `bagUsageFormat`.
+	for _, bagUsageFormat in ipairs(bagUsageFormatOrder) do
+		table.insert(
+			bagUsageFormats,
+			{
+				value = bagUsageFormat,
+				text = L["Setting_BagUsageFormat_" .. bagUsageFormat],
+			}
+		)
+	end
+end
+
 
 --- Assigned to the `hideFunc` property of the `*UseSkinColors` settings to hide
 --- their menu entries when the default skin is active.
@@ -105,13 +150,19 @@ end
 
 local hookSettings = {
 	{
-		menuTitle = L.Menu_Settings_Tooltips,
+		menuTitle = L.Menu_Settings_InfoTooltip,
 	},
 	{
 		name = "globalInfoTooltips",
 		scope = BS_SETTING_SCOPE.ACCOUNT,
-		type = BS_SETTING_TYPE.BOOL,
+		type = BS_SETTING_TYPE.BOOLEAN,
 		defaultValue = true,
+	},
+	{
+		name = "showInfoTooltipsWithoutAlt",
+		scope = BS_SETTING_SCOPE.ACCOUNT,
+		type = BS_SETTING_TYPE.BOOLEAN,
+		defaultValue = false,
 	},
 	{
 		menuTitle = L.Menu_Settings_ToggleBagsWith,
@@ -119,25 +170,25 @@ local hookSettings = {
 	{
 		name = "toggleBagsWithAuctionHouse",
 		scope = BS_SETTING_SCOPE.ACCOUNT,
-		type = BS_SETTING_TYPE.BOOL,
+		type = BS_SETTING_TYPE.BOOLEAN,
 		defaultValue = true,
 	},
 	{
 		name = "toggleBagsWithBankFrame",
 		scope = BS_SETTING_SCOPE.ACCOUNT,
-		type = BS_SETTING_TYPE.BOOL,
+		type = BS_SETTING_TYPE.BOOLEAN,
 		defaultValue = true,
 	},
 	{
 		name = "toggleBagsWithMailFrame",
 		scope = BS_SETTING_SCOPE.ACCOUNT,
-		type = BS_SETTING_TYPE.BOOL,
+		type = BS_SETTING_TYPE.BOOLEAN,
 		defaultValue = true,
 	},
 	{
 		name = "toggleBagsWithTradeFrame",
 		scope = BS_SETTING_SCOPE.ACCOUNT,
-		type = BS_SETTING_TYPE.BOOL,
+		type = BS_SETTING_TYPE.BOOLEAN,
 		defaultValue = true,
 	},
 	{
@@ -146,7 +197,7 @@ local hookSettings = {
 	{
 		name = "replaceBank",
 		scope = BS_SETTING_SCOPE.ACCOUNT,
-		type = BS_SETTING_TYPE.BOOL,
+		type = BS_SETTING_TYPE.BOOLEAN,
 		defaultValue = true,
 		onChange = function(settings, settingName, newValue)
 			Bagshui.components.Bank:ReplaceBlizzardBank(newValue)
@@ -184,7 +235,7 @@ for _, inventoryType in ipairs(BS_INVENTORY_TYPE_UI_ORDER) do
 				{
 					name = "hookBag" .. containerId,
 					scope = BS_SETTING_SCOPE.ACCOUNT,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					title = bagName,
 					tooltipTitle = string.format(L.Setting_HookBagTooltipTitle, bagName),
 					tooltipText = string.format(L.Setting_HookBagTooltipText, bagName),
@@ -253,7 +304,7 @@ for _, profileTypeKey in pairs(BS_PROFILE_ORDER) do
 		{
 			name = "createNewProfile" .. profileType,
 			scope = BS_SETTING_SCOPE.ACCOUNT,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = true,
 			disableFunc = function(settingName, settings)
 				-- Disable menu item for built-in profiles.
@@ -318,6 +369,52 @@ end
 
 
 
+local sellProtectionQualityChoices = {}
+
+for quality = 1, 10 do
+	local qualityDescription = _G["ITEM_QUALITY" .. quality .. "_DESC"]
+	if not qualityDescription then
+		break
+	end
+	table.insert(
+		sellProtectionQualityChoices,
+		1,
+		{
+			value = quality,
+			text = qualityDescription,
+			tooltipTitle = string.format(L.sellProtectionQualityThreshold_Choice_TooltipTitle, qualityDescription),
+			tooltipText = string.format(L.sellProtectionQualityThreshold_Choice_TooltipText, qualityDescription),
+			textR = _G.ITEM_QUALITY_COLORS[quality].r,
+			textG = _G.ITEM_QUALITY_COLORS[quality].g,
+			textB = _G.ITEM_QUALITY_COLORS[quality].b,
+		}
+	)
+end
+
+
+--- Assigned to the `disableFunc` property of the `sellProtection*` settings
+--- to disable them when the `sellProtectionEnabled` setting is false.
+---@param settingName string
+---@param settings table
+---@return boolean
+local function disableWhenSellProtectionOff(settingName, settings)
+	return settings.sellProtectionEnabled == false
+end
+
+
+--- Assigned to the `choicesCheckedFunc` property of the `sellProtectionQualityThreshold`
+--- setting to place check marks next to all qualities greater than or equal to the
+--- current setting value.
+---@param settingName string
+---@param settings table
+---@param value any
+---@return boolean checked
+local function checkQualityGreaterEqual(settingName, settings, value)
+	return value >= settings.sellProtectionQualityThreshold
+end
+
+
+
 -- This is where settings and their defaults are configured.
 -- Tables in the arrays corresponding to each BS_SETTING_APPLICABILITY key
 -- must conform to the `settingsTable` parameter definition of `Settings:InitSettingsInfo()`.
@@ -336,12 +433,13 @@ Bagshui.config.Settings = {
 		{
 			name = "windowLocked",
 			scope = BS_SETTING_SCOPE.INVENTORY,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = false,
 		},
 
 		{
-			submenuName = L.Menu_Settings_Advanced,
+			submenuName = L.Menu_Settings_General,
+			tooltipTitle = L.Menu_Settings_General_TooltipText,
 			settings = {
 				{
 					menuTitle = L.Menu_Settings_Commands,
@@ -354,6 +452,73 @@ Bagshui.config.Settings = {
 							settings._inventoryClassInstance:ResetStockState()
 						end
 					end,
+				},
+
+				{
+					menuTitle = L.Menu_Settings_Behaviors,
+				},
+				{
+					name = "disableAutomaticResort",
+					scope = BS_SETTING_SCOPE.CHARACTER,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = false,
+				},
+
+
+				{
+					submenuName = L.Menu_Settings_SellProtection,
+					tooltipText = L.sellProtectionEnabled_TooltipText,
+					settings = {
+						{
+							menuTitle = L.Menu_Settings_SellProtection,
+						},
+						{
+							name = "sellProtectionEnabled",
+							scope = BS_SETTING_SCOPE.ACCOUNT,
+							type = BS_SETTING_TYPE.BOOLEAN,
+							defaultValue = true,
+						},
+
+						{
+							menuTitle = L.Menu_Settings_ItemProperties,
+						},
+						{
+							name = "sellProtectionActiveQuest",
+							scope = BS_SETTING_SCOPE.ACCOUNT,
+							type = BS_SETTING_TYPE.BOOLEAN,
+							defaultValue = true,
+							disableFunc = disableWhenSellProtectionOff,
+						},
+						{
+							name = "sellProtectionEquipped",
+							scope = BS_SETTING_SCOPE.ACCOUNT,
+							type = BS_SETTING_TYPE.BOOLEAN,
+							defaultValue = false,
+							disableFunc = disableWhenSellProtectionOff,
+						},
+						{
+							name = "sellProtectionSoulbound",
+							scope = BS_SETTING_SCOPE.ACCOUNT,
+							type = BS_SETTING_TYPE.BOOLEAN,
+							defaultValue = true,
+							disableFunc = disableWhenSellProtectionOff,
+						},
+
+						{
+							menuTitle = L.Quality,
+						},
+						{
+							name = "sellProtectionQualityThreshold",
+							scope = BS_SETTING_SCOPE.ACCOUNT,
+							type = BS_SETTING_TYPE.CHOICES,
+							inline = true,
+							defaultValue = 4,
+							choices = sellProtectionQualityChoices,
+							disableFunc = disableWhenSellProtectionOff,
+							choicesCheckedFunc = checkQualityGreaterEqual,
+						},
+					},
+
 				},
 
 
@@ -386,7 +551,7 @@ Bagshui.config.Settings = {
 
 
 				{
-					menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_Size,
+					menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_SizeAndLayering,
 				},
 
 				-- Scale of the entire window.
@@ -406,16 +571,55 @@ Bagshui.config.Settings = {
 					inventoryWindowUpdateOnChange = true,
 				},
 
+				-- Frame strata.
+				{
+					name = "windowStrata",
+					scope = BS_SETTING_SCOPE.CHARACTER,
+					type = BS_SETTING_TYPE.CHOICES,
+					defaultValue = "MEDIUM",
+					choices = {
+						{
+							value = "DIALOG",
+							text = L.windowStrata_Choice_DIALOG,
+						},
+						{
+							value = "HIGH",
+							text = L.windowStrata_Choice_HIGH,
+						},
+						{
+							value = "MEDIUM",
+							text = L.windowStrata_Choice_MEDIUM,
+						},
+						{
+							value = "LOW",
+							text = L.windowStrata_Choice_LOW,
+						},
+					},
+					inventoryWindowUpdateOnChange = true,
+				},
+
 
 				{
-					menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_Behaviors,
+					menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_Toggles,
 				},
 				{
 					name = "windowDoubleClickActions",
 					scope = BS_SETTING_SCOPE.ACCOUNT,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = false,
 				},
+
+				{
+					menuTitle = L.Menu_Settings_Accessibility,
+				},
+				{
+					name = "colorblindMode",
+					scope = BS_SETTING_SCOPE.ACCOUNT,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = false,
+					inventoryWindowUpdateOnChange = true,
+				},
+
 			},
 		},
 
@@ -431,6 +635,8 @@ Bagshui.config.Settings = {
 		-- Options submenu for Structure profile.
 		{
 			submenuName = L.Menu_Settings_Options,
+			tooltipTitle = L.Menu_Settings_StructureOptions_TooltipTitle,
+			tooltipText = L.Menu_Settings_StructureOptions_TooltipText,
 			settings = {
 
 				{
@@ -440,7 +646,7 @@ Bagshui.config.Settings = {
 					name = "stackEmptySlots",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.STRUCTURE,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryResortOnChange = true,
 				},
@@ -469,7 +675,7 @@ Bagshui.config.Settings = {
 					name = "hideGroupLabelsOverride",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.STRUCTURE,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = false,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -487,6 +693,8 @@ Bagshui.config.Settings = {
 
 		{
 			submenuName = L.Menu_Settings_Colors,
+			tooltipTitle = L.Menu_Settings_DesignColors_TooltipTitle,
+			tooltipText = L.Menu_Settings_DesignColors_TooltipText .. BS_NEWLINE .. LIGHTYELLOW_FONT_COLOR_CODE .. L.Menu_Settings_ActiveDesignProfileHint .. FONT_COLOR_CODE_CLOSE,
 			settings = {
 
 				{
@@ -496,7 +704,7 @@ Bagshui.config.Settings = {
 					name = "windowUseSkinColors",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					hideFunc = useSkinColorsHide,
 					nameFunc = useSkinColorsName,
@@ -530,7 +738,7 @@ Bagshui.config.Settings = {
 					name = "groupUseSkinColors",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					hideFunc = useSkinColorsHide,
 					nameFunc = useSkinColorsName,
@@ -566,6 +774,32 @@ Bagshui.config.Settings = {
 					defaultValue = { 1, 1, 1, 0.8 },
 					inventoryWindowUpdateOnChange = true,
 				},
+
+				{
+					menuTitle = L.EmptySlots,
+				},
+				{
+					name = "emptySlotBackgroundImage",
+					scope = BS_SETTING_SCOPE.INVENTORY,
+					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = true,
+					inventoryWindowUpdateOnChange = true,
+				},
+				{
+					name = "emptySlotBackgroundColor",
+					scope = BS_SETTING_SCOPE.INVENTORY,
+					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+					type = BS_SETTING_TYPE.COLOR,
+					hasOpacity = true,
+					defaultValue = { 0.090, 0.085, 0.090, 0.95 },
+					disableFunc = function(settingName, settings)
+						-- Disable colors when background is enabled.
+						return settings.emptySlotBackgroundImage
+					end,
+					inventoryWindowUpdateOnChange = true,
+				},
+
 
 				{
 					menuTitle = L.Menu_Settings_Toolbar,
@@ -615,6 +849,8 @@ Bagshui.config.Settings = {
 
 		{
 			submenuName = L.Menu_Settings_Size,
+			tooltipTitle = L.Menu_Settings_DesignSize_TooltipTitle,
+			tooltipText = L.Menu_Settings_DesignSize_TooltipText .. BS_NEWLINE .. LIGHTYELLOW_FONT_COLOR_CODE .. L.Menu_Settings_ActiveDesignProfileHint .. FONT_COLOR_CODE_CLOSE,
 			settings = {
 
 				{
@@ -686,6 +922,8 @@ Bagshui.config.Settings = {
 
 		{
 			submenuName = L.Menu_Settings_View,
+			tooltipTitle = L.Menu_Settings_DesignView_TooltipTitle,
+			tooltipText = L.Menu_Settings_DesignView_TooltipText .. BS_NEWLINE .. LIGHTYELLOW_FONT_COLOR_CODE .. L.Menu_Settings_ActiveDesignProfileHint .. FONT_COLOR_CODE_CLOSE,
 			settings = {
 
 				{
@@ -696,7 +934,7 @@ Bagshui.config.Settings = {
 					name = "showHeader",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -705,7 +943,7 @@ Bagshui.config.Settings = {
 					name = "showFooter",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -714,7 +952,99 @@ Bagshui.config.Settings = {
 					name = "showBagBar",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = true,
+					inventoryWindowUpdateOnChange = true,
+				},
+
+
+				{
+					submenuName = L.Menu_Settings_BagUsage,
+					tooltipText = L.Menu_Settings_BagUsage_TooltipText,
+					settings = {
+						{
+							menuTitle = L.Menu_Settings_PerBag,
+						},
+						{
+							name = "bagUsageAlwaysShow",
+							scope = BS_SETTING_SCOPE.INVENTORY,
+							profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+							type = BS_SETTING_TYPE.BOOLEAN,
+							defaultValue = false,
+							inventoryWindowUpdateOnChange = true,
+						},
+
+						{
+							menuTitle = L.Menu_Settings_Summary,
+						},
+						{
+							menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_Visibility,
+						},
+						{
+							name = "bagUsageDisplay",
+							scope = BS_SETTING_SCOPE.INVENTORY,
+							profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+							type = BS_SETTING_TYPE.CHOICES,
+							inline = true,
+							defaultValue = BS_INVENTORY_BAG_USAGE_DISPLAY.SMART,
+							inventoryWindowUpdateOnChange = true,
+							choices = bagUsageDisplayChoices,
+						},
+
+						{
+							menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_Format,
+						},
+						{
+							name = "bagUsageFormat",
+							scope = BS_SETTING_SCOPE.INVENTORY,
+							profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+							type = BS_SETTING_TYPE.CHOICES,
+							inline = true,
+							defaultValue = BS_INVENTORY_BAG_USAGE_FORMAT.EMPTY,
+							inventoryWindowUpdateOnChange = true,
+							choices = bagUsageFormats,
+						},
+
+					},
+				},
+
+				{
+					name = "showMoney",
+					scope = BS_SETTING_SCOPE.INVENTORY,
+					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = true,
+					inventoryWindowUpdateOnChange = true,
+				},
+
+
+				{
+					menuTitle = L.Menu_Settings_Buttons
+				},
+
+				{
+					name = "showPickLock",
+					scope = BS_SETTING_SCOPE.INVENTORY,
+					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = true,
+					inventoryWindowUpdateOnChange = true,
+				},
+
+				{
+					name = "showDisenchant",
+					scope = BS_SETTING_SCOPE.INVENTORY,
+					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = true,
+					inventoryWindowUpdateOnChange = true,
+				},
+
+				{
+					name = "showClam",
+					scope = BS_SETTING_SCOPE.INVENTORY,
+					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -723,18 +1053,9 @@ Bagshui.config.Settings = {
 					name = "showHearthstone",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryCacheUpdateOnChange = true,
-				},
-
-				{
-					name = "showMoney",
-					scope = BS_SETTING_SCOPE.INVENTORY,
-					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
-					defaultValue = true,
-					inventoryWindowUpdateOnChange = true,
 				},
 
 				{
@@ -745,7 +1066,7 @@ Bagshui.config.Settings = {
 					name = "showGroupLabels",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					textDisplayFunc = function(name, settingName, settings)
 						return name .. (settings.hideGroupLabelsOverride and (LIGHTYELLOW_FONT_COLOR_CODE .. " ×" .. FONT_COLOR_CODE_CLOSE) or "")
 					end,
@@ -771,7 +1092,7 @@ Bagshui.config.Settings = {
 					name = "itemUsableColors",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -783,7 +1104,7 @@ Bagshui.config.Settings = {
 					name = "itemQualityBadges",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					textDisplayFunc = colorblindModeOverrideTextFunc,
 					tooltipTextDisplayFunc = colorblindModeOverrideTooltipFunc,
 					defaultValue = false,
@@ -793,7 +1114,7 @@ Bagshui.config.Settings = {
 					name = "itemUsableBadges",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					textDisplayFunc = colorblindModeOverrideTextFunc,
 					tooltipTextDisplayFunc = colorblindModeOverrideTooltipFunc,
 					defaultValue = false,
@@ -803,7 +1124,7 @@ Bagshui.config.Settings = {
 					name = "itemActiveQuestBadges",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -811,7 +1132,7 @@ Bagshui.config.Settings = {
 					name = "itemStockBadges",
 					scope = BS_SETTING_SCOPE.INVENTORY,
 					profileScope = BS_SETTING_PROFILE_SCOPE.DESIGN,
-					type = BS_SETTING_TYPE.BOOL,
+					type = BS_SETTING_TYPE.BOOLEAN,
 					defaultValue = true,
 					inventoryWindowUpdateOnChange = true,
 				},
@@ -822,15 +1143,19 @@ Bagshui.config.Settings = {
 
 
 		{
-			menuTitle = L.Menu_Settings_General,
+			menuTitle = L.Menu_Settings_Defaults,
 		},
 
 		{
-			submenuName = L.Menu_Settings_DefaultProfiles,
+			submenuName = L.Profiles,
+			tooltipTitle = L.Menu_Settings_DefaultProfiles,
+			tooltipText = L.Menu_Settings_DefaultProfiles_TooltipText,
 			settings = defaultProfileSettings,
 		},
 
-
+		{
+			menuTitle = L.Menu_Settings_Etcetera,
+		},
 
 		{
 			submenuName = L.Menu_Settings_More,
@@ -861,18 +1186,10 @@ Bagshui.config.Settings = {
 				},
 
 				{
-					menuTitle = L.Menu_Settings_Accessibility,
+					menuTitle = L.Menu_Settings_NitpickyDetails,
 				},
 				{
-					name = "colorblindMode",
-					scope = BS_SETTING_SCOPE.ACCOUNT,
-					type = BS_SETTING_TYPE.BOOL,
-					defaultValue = false,
-					inventoryWindowUpdateOnChange = true,
-				},
-
-				{
-					menuTitle = L.Menu_Settings_ChangeTiming,
+					menuTitle = BS_MENU_SUBTITLE_INDENT .. L.Menu_Settings_ChangeTiming,
 				},
 				{
 					name = "itemStockBadgeFadeDuration",
@@ -1005,6 +1322,12 @@ Bagshui.config.Settings = {
 					},
 					inventoryWindowUpdateOnChange = true,
 				},
+				{
+					name = "itemStockChangeClearOnInteract",
+					scope = BS_SETTING_SCOPE.ACCOUNT,
+					type = BS_SETTING_TYPE.BOOLEAN,
+					defaultValue = false,
+				},
 
 
 				{
@@ -1012,6 +1335,7 @@ Bagshui.config.Settings = {
 				},
 				{
 					submenuName = L.Menu_Settings_Integration,
+					tooltipText = L.Menu_Settings_Integration_TooltipText,
 					-- Insert the hook settings submenu.
 					settings = hookSettings,
 				},
@@ -1074,7 +1398,7 @@ Bagshui.config.Settings = {
 		{
 			name = "qualityColorTooltipBorders",
 			scope = BS_SETTING_SCOPE.CHARACTER,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			hidden = true,
 			defaultValue = false,
 		},
@@ -1103,14 +1427,14 @@ Bagshui.config.Settings = {
 			name = "rightClickAttach",
 			scope = BS_SETTING_SCOPE.ACCOUNT,
 			hidden = true,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = true,
 		},
 		{
 			name = "altClickAttach",
 			scope = BS_SETTING_SCOPE.ACCOUNT,
 			hidden = true,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = true,
 		},
 
@@ -1120,7 +1444,7 @@ Bagshui.config.Settings = {
 			name = "hint_bagshuiTooltip",
 			scope = BS_SETTING_SCOPE.ACCOUNT,
 			hidden = true,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = false,
 		},
 
@@ -1133,7 +1457,7 @@ Bagshui.config.Settings = {
 			name = "compat_pfUIBagsIgnored",
 			scope = BS_SETTING_SCOPE.CHARACTER,
 			hidden = true,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = false,
 		},
 		{
@@ -1161,7 +1485,7 @@ Bagshui.config.Settings = {
 			name = "compat_tDFAllInOneBagsIgnored",
 			scope = BS_SETTING_SCOPE.CHARACTER,
 			hidden = true,
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = false,
 		},
 		{
@@ -1203,7 +1527,7 @@ Bagshui.config.Settings = {
 			inventoryWindowUpdateOnChange = true,
 		},
 		hideStockBadge = {
-			type = BS_SETTING_TYPE.BOOL,
+			type = BS_SETTING_TYPE.BOOLEAN,
 			defaultValue = false,
 			inventoryWindowUpdateOnChange = true,
 		},
