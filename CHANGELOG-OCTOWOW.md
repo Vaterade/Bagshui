@@ -6,7 +6,14 @@
 
 ## Changes
 
-No existing code was changed. The addon folder contains these additional files:
+### Code
+
+- Bag slot buttons read `OnUpdate` elapsed time from `arg1`.
+- Bags that contain items can be swapped (`Components/Inventory.BagSwap.lua`). Trying to replace an equipped bag moves its items to free slots, equips the new bag, then moves the items in, keeping their slot numbers where possible. At the bank, the other side's free slots count too (bank slots for bags, bag slots for bank bags). Items stay outside when the new bag is smaller or is a profession bag that didn't replace the same type.
+
+### Additional files
+
+The addon folder contains these files from the original install:
 
 | File | Note |
 |---|---|

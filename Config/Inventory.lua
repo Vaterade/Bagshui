@@ -55,9 +55,15 @@ Bagshui.config.Inventory = {
 			-- Open/close with Trade frame (NOT TradeSkill frame)).
 			TRADE_SHOW = "Open",
 			TRADE_CLOSED = "Close",
+			-- Bag swapping.
+			UI_ERROR_MESSAGE = true,
 		},
 
+		-- Other inventory classes whose free slots can hold items during a bag swap.
+		bagSwappingSupplementalStorage = { BS_INVENTORY_TYPE.BANK },
+
 		apiFunctionsToHook = {
+			UIErrorsFrame_OnEvent = "UIErrorsFrame_OnEvent",
 			OpenAllBags = "ToggleBag",
 			OpenBackpack = "OpenBag",
 			OpenBag = "OpenBag",
@@ -120,6 +126,15 @@ Bagshui.config.Inventory = {
 			BANKFRAME_OPENED = "Open",
 			PLAYERBANKSLOTS_CHANGED = "UpdateBagBar",
 			PLAYERBANKBAGSLOTS_CHANGED = "UpdateBagBar",
+			-- Bag swapping.
+			UI_ERROR_MESSAGE = true,
+		},
+
+		-- Other inventory classes whose free slots can hold items during a bag swap.
+		bagSwappingSupplementalStorage = { BS_INVENTORY_TYPE.BAGS },
+
+		apiFunctionsToHook = {
+			UIErrorsFrame_OnEvent = "UIErrorsFrame_OnEvent",
 		},
 
 		opensViaHooks = false,

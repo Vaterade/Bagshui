@@ -317,6 +317,15 @@ end
 -- we need to first call the original function, then make sure our window is up to date.
 ---@param wowApiFunctionName string Hooked WoW API function that triggered this call.
 function Inventory:BagSlotButton_OnHook(wowApiFunctionName)
+	-- A Bagshui item was dropped on the Blizzard action bar's bag slot, which needs
+	-- the same treatment as our own bag slot buttons when it's a bag swap.
+	if
+		wowApiFunctionName == "BagSlotButton_OnClick"
+		and self:BagSwap_TryFromCursor(self.inventoryIdsToContainerIds[_G.this:GetID()])
+	then
+		return
+	end
+
 	-- Don't interfere if this isn't a Bagshui button
 	if not string.find(_G.this:GetName(), self.bagSlotNameFormat) then
 		self.hooks:OriginalHook(wowApiFunctionName)

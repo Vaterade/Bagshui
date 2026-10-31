@@ -578,6 +578,12 @@ end
 function Inventory:OnEvent(event, arg1, arg2)
 	-- self:PrintDebug("OnEvent(): " ..  event .. " // " .. tostring(arg1) .. " // " .. tostring(arg2))
 
+	-- Only used for bag swapping and shouldn't trigger an inventory update.
+	if event == "UI_ERROR_MESSAGE" then
+		self:BagSwap_OnError(arg1)
+		return
+	end
+
 	-- Store the name of this event so it can be checked when updating the inventory
 	-- cache to see if the cache update should be delayed (see self.lastEvent check
 	-- near the top of Inventory:UpdateCache()).

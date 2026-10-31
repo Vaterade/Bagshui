@@ -132,7 +132,7 @@ function Bank:BagSlotButton_Init(bagSlotButton)
 			-- Hack to get a call to PickupBagFromSlot().
 			-- Another possibility is using `_G.BankFrameItemButtonBag_OnShiftClick()`.
 			this:GetScript("OnDragStart")()
-		else
+		elseif not self:BagSwap_TryFromCursor(this.bagshuiData.bagNum) then
 			oldOnClick()
 		end
 	end)

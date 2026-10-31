@@ -809,6 +809,10 @@ BsLocalization:AddLocale("enUS", {
 
 ["Error"] = "Error",
 ["Error_AddonDependency"] = "%s is not installed or enabled.",
+["Bag_SlotsNeededToSwap"] = "Swapping this bag needs %d more free slot(s).",
+["Error_BagSwap_EmptyOldFailed"] = "Failed to empty the old bag.",
+["Error_BagSwap_EquipNewFailed"] = "Failed to equip the new bag.",
+["Error_BagSwap_Stopped"] = "Bag swap stopped; some items may still be outside the bag.",
 ["Error_CategoryEvaluation"] = "%s: %s",  -- "<Category Name>: <Error Message>"
 ["Error_DuplicateName"] = "There is already a %s named %s.",  -- "There is already a <Object Type> named <Name>."
 ["Error_GroupNotFound"] = "Group ID %s not found.",

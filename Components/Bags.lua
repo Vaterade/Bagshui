@@ -53,6 +53,9 @@ function Bags:BagSlotButton_Init(bagSlotButton)
 	--- `PutItemInBag()`, this will *not* intercept BOE bags. Changing this would require detouring into
 	--- `Bagshui:PickupItem()` when a bag is on the cursor, which we're not currently tracking.
 	bagSlotButton:SetScript("OnClick", function()
+		if self:BagSwap_TryFromCursor(_G.this.bagshuiData.bagNum) then
+			return
+		end
 		if not _G.PutItemInBag(_G.this.bagshuiData.inventorySlotId) then
 			oldOnClick()
 		end
