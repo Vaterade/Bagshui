@@ -1,10 +1,10 @@
 # Changelog OctoWoW – Bagshui
 
-> Branch `upgrade-1.5.15` = Bagshui 1.5.15, the last upstream release, plus the changes below.
+> Branch `octowow` = Bagshui 1.5.15, the last upstream release, plus the changes below.
 
 **Base:** `acid9000/Bagshui` `3b5e33b` (2025-09-18). The original `veechs/Bagshui` repo couldn't be reached, so this is a re-upload of 1.5.15. It matches `talex00/Bagshui` apart from that fork's Russian translation.
 
-The 1.0.5 install this replaces is on the `octowow` branch, including our own bag swap code, which 1.5.15's built-in swap makes unnecessary.
+The last commit on the 1.0.5 install this replaces is `ff9018d`, which includes our own bag swap code. 1.5.15's built-in swap makes that code unnecessary.
 
 ## Changes
 
