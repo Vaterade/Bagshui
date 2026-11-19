@@ -1324,6 +1324,44 @@ BsLocalization:AddLocale("enUS", {
 ["windowUseSkinColors_TooltipText"] = "Use colors from %s instead of Bagshui's settings.",
 
 
+-- OctoWoW: Mail to Alts.
+["Alts"] = "Alts",
+["MailToAlts_Title"] = "Mail to Alts",
+["MailToAlts_Menu_MailItemTo"] = "Mail Item To",
+["MailToAlts_Menu_MailItemTo_TooltipText"] = "Mark every copy of this item to be mailed to another character. It then appears in the Mail to Alts panel at a mailbox.",
+["MailToAlts_Menu_MailCategoryTo"] = "Mail Category To",
+["MailToAlts_Menu_MailCategoryTo_Named"] = "Mail %s To",
+["MailToAlts_Menu_MailCategoryTo_TooltipText"] = "Mark every item in this category to be mailed to another character. A choice made for an item wins over its category.",
+["MailToAlts_Menu_None"] = "Nobody",
+["MailToAlts_Menu_CategoryNone_TooltipText"] = "Items in this category aren't mailed (unless marked one by one).",
+["MailToAlts_Menu_FollowCategory"] = "As Category (%s)",
+["MailToAlts_Menu_FollowCategory_TooltipText"] = "Follow the category's choice.",
+["MailToAlts_Menu_Keep"] = "Keep",
+["MailToAlts_Menu_Keep_TooltipText"] = "Never mail this item, even if its category is marked.",
+["MailToAlts_Menu_CurrentCharacter"] = "(this character)",
+["MailToAlts_TooltipLine"] = "|cff88bbffMail to %s|r",
+["MailToAlts_SendCount"] = "Send %d",
+["MailToAlts_ToCourier"] = "To Courier",
+["MailToAlts_Stacks"] = "%d stacks",
+["MailToAlts_Empty"] = "No marked items in your bags. Right-click an item to mark it.",
+["MailToAlts_Hint"] = "One mail per stack, postage each.",
+["MailToAlts_Hint_Courier"] = "Fills Courier's Send tab; send from there.",
+["MailToAlts_Progress"] = "Sending %d/%d to %s...",
+["MailToAlts_Done"] = "Mail to Alts: sent %d mail(s) to %s, skipped %d.",
+["MailToAlts_Aborted_MailboxClosed"] = "Mail to Alts: the mailbox closed; stopped sending.",
+["MailToAlts_CourierAdded"] = "Mail to Alts: added %d item(s) for %s to Courier.",
+["MailToAlts_CourierAddedMore"] = "Mail to Alts: added %d item(s) for %s to Courier; %d more after you send these.",
+["MailToAlts_Error_NotAtMailbox"] = "Mail to Alts: open a mailbox first.",
+["MailToAlts_Error_AttachmentInUse"] = "Mail to Alts: take the item out of the mail's attachment slot first.",
+["MailToAlts_Error_CursorBusy"] = "Mail to Alts: put down the item on your cursor first.",
+["MailToAlts_Error_NotEnoughMoney"] = "Mail to Alts: not enough money for the postage.",
+["MailToAlts_Error_SendFailed"] = "Mail to Alts: couldn't send %s; skipped it.",
+["MailToAlts_Error_Locked"] = "Mail to Alts: %s stayed locked; skipped it.",
+["MailToAlts_Error_CannotMail"] = "Mail to Alts: %s can't be mailed; skipped it.",
+["MailToAlts_Error_CourierBusy"] = "Mail to Alts: Courier is sending; wait for it to finish.",
+["MailToAlts_Error_CourierHasAttachments"] = "Mail to Alts: Courier's Send tab already has items for someone else; send or clear them first.",
+
+
 })
 
 

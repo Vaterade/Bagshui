@@ -830,6 +830,27 @@ function Inventory:InitMenus()
 					value = "manage",
 				},
 			},
+			-- OctoWoW: Mail to Alts (Components/MailToAlts.lua).
+			{
+				_bagshuiMenuItemId = "ItemMailTo",
+				text = L.MailToAlts_Menu_MailItemTo,
+				tooltipTitle = L.MailToAlts_Menu_MailItemTo,
+				tooltipText = L.MailToAlts_Menu_MailItemTo_TooltipText,
+				hasArrow = true,
+				value = {
+					value = "mailTo",
+				},
+			},
+			{
+				_bagshuiMenuItemId = "ItemMailCategoryTo",
+				text = L.MailToAlts_Menu_MailCategoryTo,
+				tooltipTitle = L.MailToAlts_Menu_MailCategoryTo,
+				tooltipText = L.MailToAlts_Menu_MailCategoryTo_TooltipText,
+				hasArrow = true,
+				value = {
+					value = "mailCategoryTo",
+				},
+			},
 			{
 				text = L.Move,
 				tooltipTitle = string.format(L.Prefix_Move, L.Item),
@@ -958,6 +979,10 @@ function Inventory:InitMenus()
 			-- Populated by the OpenMenu callback function.
 			itemInfo = {},
 
+			-- OctoWoW: Mail to Alts. Populated by the OpenMenu callback function.
+			mailTo = {},
+			mailCategoryTo = {},
+
 			manage = {
 				-- Remove from worn gear list.
 				{
@@ -1049,6 +1074,21 @@ function Inventory:InitMenus()
 						menuItem.tCoordBottom = BsSkin.itemSlotIconTexCoord[4]
 					end
 
+				elseif
+					menuItem._bagshuiMenuItemId == "ItemMailTo"
+					or menuItem._bagshuiMenuItemId == "ItemMailCategoryTo"
+				then
+					-- OctoWoW: Mail to Alts.
+					menuItem.disabled = not isMeaningfulItemId
+					if not BsMailToAlts then
+						menuItem._bagshuiHide = true
+					elseif menuItem._bagshuiMenuItemId == "ItemMailTo" then
+						menuItem.checked = BsMailToAlts.data.items[item.id] and true or false
+					else
+						menuItem.text = string.format(L.MailToAlts_Menu_MailCategoryTo_Named, BsUtil.TruncateString(BsCategories:GetName(item.bagshuiCategoryId) or L.Category, 30))
+						menuItem.checked = BsMailToAlts.data.categories[item.bagshuiCategoryId] and true or false
+					end
+
 				elseif menuItem._bagshuiMenuItemId == "ItemMove" then
 					-- Item: Disable the Move menu for empty slots since they can't be directly assigned to a category, only via a rule function.
 					menuItem.disabled = not isMeaningfulItemId
@@ -1137,6 +1177,12 @@ function Inventory:InitMenus()
 				-- Hide unused menu items.
 				self.menus:HideMenuItems(infoMenu, infoMenuItemCount + 1)
 
+				-- OctoWoW: Mail to Alts submenus.
+				if BsMailToAlts and isMeaningfulItemId then
+					BsMailToAlts:FillMenu(itemMenu.levels[2].mailTo, self.menus, item, false)
+					BsMailToAlts:FillMenu(itemMenu.levels[2].mailCategoryTo, self.menus, item, true)
+				end
+
 				-- Update Matched Categories submenu.
 				BsCategories:GetAllMatchingCategoriesForItem(item, nil, self._itemMenuMatchedCategoryList)
 				self._itemMenuAssignedCategoryList[1] = item.bagshuiCategoryId
@@ -1157,6 +1203,20 @@ function Inventory:InitMenus()
 			func = showItemInfo,
 		}
 	)
+
+	-- OctoWoW: Mail to Alts submenus, filled by `MailToAlts:FillMenu()`.
+	local function mailToClick(item, choice)
+		BsMailToAlts.MenuClick(item, choice)
+	end
+	for _, mailMenu in ipairs({ self.menus.menuList.Item.levels[2].mailTo, self.menus.menuList.Item.levels[2].mailCategoryTo }) do
+		self.menus:InitializeEmptyMenu(
+			mailMenu,
+			{
+				text = "",
+				func = mailToClick,
+			}
+		)
+	end
 
 
 	-- Direct Assignment Class Selection Menu.

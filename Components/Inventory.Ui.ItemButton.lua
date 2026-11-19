@@ -483,6 +483,12 @@ function Inventory:ItemButton_OnEnter(itemButton)
 			_G.GameTooltip:AddLine(string.format(L.Tooltip_Inventory_TradeShortcut, L.AltClick, _G.UnitName("target")))
 		end
 
+		-- OctoWoW: Mail to Alts mark.
+		local mailToLine = BsMailToAlts and BsMailToAlts:TooltipLine(item)
+		if mailToLine then
+			_G.GameTooltip:AddLine(mailToLine)
+		end
+
 
 	elseif self.editMode then
 		-- By default in Edit Mode, show category info as the primary tooltip.

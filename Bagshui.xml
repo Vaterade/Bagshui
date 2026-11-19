@@ -110,6 +110,9 @@ Don't move things around unless you're sure it won't break anything.
 <Include file="Components\Bank.lua" />
 <Include file="Components\Keyring.lua" />
 
+<!-- OctoWoW: Mail to Alts - must come after the inventory components. -->
+<Include file="Components\MailToAlts.lua" />
+
 
 
 <!-- XML UI Stuff -->
