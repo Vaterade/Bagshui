@@ -742,22 +742,29 @@ function MailToAlts:GetRow(index)
 
 	-- Recipient header parts.
 	row.button = self.ui:CreateButton("RowButton" .. index, row, "", function()
-		local r = _G.this:GetParent()
+		local r = _G.this.bagshuiMailRow
 		if MailToAlts:GetCourier() then
 			MailToAlts:SendViaCourier(r.characterId)
 		else
 			MailToAlts:StartSending(r.characterId)
 		end
 	end)
+	-- Skins can reparent controls (the pfUI skin moves checkboxes into a backdrop frame),
+	-- so controls keep a direct reference to their row instead of using GetParent().
+	row.button.bagshuiMailRow = row
 	row.button:SetPoint("RIGHT", row, "RIGHT", 0, 0)
 	row.button:SetHeight(ROW_HEIGHT)
 
 	-- Item parts.
 	row.check = self.ui:CreateCheckbox("RowCheck" .. index, row, nil, nil, function()
-		local r = _G.this:GetParent()
+		local r = _G.this.bagshuiMailRow
 		MailToAlts:SetUnchecked(r.characterId, r.itemId, not _G.this:GetChecked())
 		MailToAlts:Refresh()
 	end, ROW_HEIGHT - 2, ROW_HEIGHT - 2)
+	row.check.bagshuiMailRow = row
+	-- With a skin backdrop, the checkbox is its child; show and hide the backdrop so it
+	-- doesn't stay visible on header rows.
+	row.checkFrame = row.check.backdrop or row.check
 	row.check:SetPoint("LEFT", row, "LEFT", 4, 0)
 
 	row.icon = row:CreateTexture(nil, "ARTWORK")
@@ -816,7 +823,7 @@ function MailToAlts:Refresh()
 		local row = self:GetRow(rowNum)
 		row.characterId = characterId
 		row.itemId = nil
-		row.check:Hide()
+		row.checkFrame:Hide()
 		row.icon:Hide()
 		row.button:Show()
 		local buttonText = courier and L.MailToAlts_ToCourier or string.format(L.MailToAlts_SendCount, group.mails)
@@ -842,6 +849,7 @@ function MailToAlts:Refresh()
 			row.characterId = characterId
 			row.itemId = entry.itemId
 			row.button:Hide()
+			row.checkFrame:Show()
 			row.check:Show()
 			row.check:SetChecked(not self:IsUnchecked(characterId, entry.itemId))
 			row.icon:Show()
