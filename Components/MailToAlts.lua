@@ -302,6 +302,8 @@ function MailToAlts:OnEvent(event)
 		self.atMailbox = true
 		-- Let Courier open its window first so the panel knows where to go.
 		Bagshui:QueueClassCallback(self, self.MailboxOpened, 0.2)
+		self.dockedHost = nil
+		self.hostWatcher:Show()
 		return
 	end
 
@@ -904,15 +906,61 @@ end
 
 function MailToAlts:Open()
 	self:InitUi()
-	local host, x, y = self:GetHostFrame()
-	self.uiFrame:ClearAllPoints()
-	if host then
-		self.uiFrame:SetPoint("TOPLEFT", host, "TOPRIGHT", x, y)
-	else
-		self.uiFrame:SetPoint("CENTER", _G.UIParent, "CENTER", 0, 0)
-	end
+	self:Dock(true)
 	self.uiFrame:Show()
 	self:Refresh()
+end
+
+
+
+--- Place the panel and the toggle button beside the visible mail window.
+---@param centerIfNoHost boolean? Center the panel when no mail window is visible.
+function MailToAlts:Dock(centerIfNoHost)
+	local host, x, y = self:GetHostFrame()
+	if host then
+		self.uiFrame:ClearAllPoints()
+		self.uiFrame:SetPoint("TOPLEFT", host, "TOPRIGHT", x, y)
+		if self.toggleButton then
+			self.toggleButton:ClearAllPoints()
+			self.toggleButton:SetPoint("TOPLEFT", host, "TOPRIGHT", x, y)
+		end
+	elseif centerIfNoHost then
+		self.uiFrame:ClearAllPoints()
+		self.uiFrame:SetPoint("CENTER", _G.UIParent, "CENTER", 0, 0)
+	end
+	self.dockedHost = host
+end
+
+
+
+--- Follow the player switching between Courier's window and the stock mail frame.
+--- Courier builds its window lazily and swaps the two itself, so there's no single
+--- event to hook; this checks a few times a second while at a mailbox.
+function MailToAlts:WatchHost()
+	if not self.atMailbox or not self.uiFrame then
+		self.hostWatcher:Hide()
+		return
+	end
+	local now = _G.GetTime()
+	if now - (self.lastHostCheck or 0) < 0.2 then
+		return
+	end
+	self.lastHostCheck = now
+
+	local host = self:GetHostFrame()
+	-- Keep the current position while neither window is up (mid-switch).
+	if not host or host == self.dockedHost then
+		return
+	end
+	self:Dock()
+	if self.uiFrame:IsVisible() then
+		-- Button labels depend on whether Courier is the host.
+		if not self.sending then
+			self:Refresh()
+		end
+	else
+		self:ShowToggleButton()
+	end
 end
 
 
@@ -937,13 +985,12 @@ function MailToAlts:ShowToggleButton()
 		end)
 		self.toggleButton:SetFrameStrata("HIGH")
 	end
-	local host, x, y = self:GetHostFrame()
+	local host = self:GetHostFrame()
 	if not host or self.uiFrame:IsVisible() then
 		self.toggleButton:Hide()
 		return
 	end
-	self.toggleButton:ClearAllPoints()
-	self.toggleButton:SetPoint("TOPLEFT", host, "TOPRIGHT", x, y)
+	self:Dock()
 	self.toggleButton:Show()
 end
 
@@ -1038,6 +1085,14 @@ MailToAlts.driver = _G.CreateFrame("Frame")
 MailToAlts.driver:Hide()
 MailToAlts.driver:SetScript("OnUpdate", function()
 	MailToAlts:OnUpdate()
+end)
+
+
+-- Re-docks the panel when the visible mail window changes (see `MailToAlts:WatchHost()`).
+MailToAlts.hostWatcher = _G.CreateFrame("Frame")
+MailToAlts.hostWatcher:Hide()
+MailToAlts.hostWatcher:SetScript("OnUpdate", function()
+	MailToAlts:WatchHost()
 end)
 
 
